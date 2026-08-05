@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <AgentBellProductVersion>0.5.0</AgentBellProductVersion>
+    <AgentBellInformationalVersion>0.5.0-beta.1</AgentBellInformationalVersion>
+    <AgentBellAndroidVersionCode>5</AgentBellAndroidVersionCode>
+    <Version>$(AgentBellInformationalVersion)</Version>
+    <VersionPrefix>$(AgentBellProductVersion)</VersionPrefix>
+    <VersionSuffix>beta.1</VersionSuffix>
+    <InformationalVersion>$(AgentBellInformationalVersion)</InformationalVersion>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <AssemblyVersion>$(AgentBellProductVersion).0</AssemblyVersion>
+    <FileVersion>$(AgentBellProductVersion).0</FileVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

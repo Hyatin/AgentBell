@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>AgentBell</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 44rem; margin: 0 auto; padding: 1.25rem; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+    .muted { opacity: .72; }
+    .ok { color: #25a45a; }
+    .warn { color: #d9822b; }
+    article { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: .75rem; padding: .9rem; margin-top: .75rem; }
+    h1, h2, p { margin: .25rem 0; }
+    #events { padding: 0; list-style: none; }
+  </style>
+</head>
+<body>
+  <header><h1>AgentBell</h1><strong id="connection" class="warn">正在连接</strong></header>
+  <p id="device" class="muted">电脑：—</p>
+  <p class="muted">协议：<span id="protocol">—</span> · 最后 sequence：<span id="sequence">0</span></p>
+  <p id="reconnect" class="muted"></p>
+  <h2>最近事件</h2>
+  <ol id="events"></ol>
+  <script>
+  (() => {
+    'use strict';
+    const backoffSeconds = [1, 2, 5, 10, 30];
+    const fragment = new URLSearchParams(location.hash.slice(1));
+    const credential = fragment.get('token') || '';
+    const connectionNode = document.getElementById('connection');
+    const deviceNode = document.getElementById('device');
+    const protocolNode = document.getElementById('protocol');
+    const sequenceNode = document.getElementById('sequence');
+    const reconnectNode = document.getElementById('reconnect');
+    const eventsNode = document.getElementById('events');
+    const displayedEventIds = new Set();
+    let socket = null;
+    let reconnectAttempt = 0;
+    let storageKey = 'agentbell.lastSequence';
+
+    function readLastSequence() {
+      const value = Number.parseInt(localStorage.getItem(storageKey) || '0', 10);
+      return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+    }
+
+    function storeLastSequence(value) {
+      if (Number.isSafeInteger(value) && value >= readLastSequence()) {
+        localStorage.setItem(storageKey, String(value));
+        sequenceNode.textContent = String(value);
+      }
+    }
+
+    function addEvent(agentEvent) {
+      if (!agentEvent || !agentEvent.eventId || displayedEventIds.has(agentEvent.eventId)) return;
+      displayedEventIds.add(agentEvent.eventId);
+      storeLastSequence(agentEvent.sequence || 0);
+      const item = document.createElement('li');
+      const card = document.createElement('article');
+      const title = document.createElement('h2');
+      const project = document.createElement('p');
+      const summary = document.createElement('p');
+      const metadata = document.createElement('p');
+      title.textContent = agentEvent.title || 'Codex 已完成当前回合';
+      project.textContent = agentEvent.project ? `项目：${agentEvent.project}` : '项目：—';
+      summary.textContent = agentEvent.summary || '当前回合已经结束。';
+      const receivedAt = new Date().toISOString();
+      metadata.textContent = `${agentEvent.occurredAt || ''} · sequence ${agentEvent.sequence || 0} · 浏览器收到 ${receivedAt}`;
+      metadata.className = 'muted';
+      card.append(title, project, summary, metadata);
+      item.append(card);
+      eventsNode.prepend(item);
+      while (eventsNode.children.length > 20) eventsNode.lastElementChild.remove();
+    }
+
+    async function verifyStatus() {
+      const response = await fetch('/api/v1/status', {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${credential}` }
+      });
+      if (!response.ok) throw new Error('unauthorized');
+      const status = await response.json();
+      deviceNode.textContent = `电脑：${status.deviceName || '—'}`;
+      protocolNode.textContent = String(status.protocolVersion || '—');
+      storageKey = `agentbell.lastSequence.${status.deviceId || 'default'}`;
+      sequenceNode.textContent = String(readLastSequence());
+    }
+
+    function scheduleReconnect() {
+      const delay = backoffSeconds[Math.min(reconnectAttempt, backoffSeconds.length - 1)];
+      reconnectAttempt += 1;
+      reconnectNode.textContent = `${delay} 秒后重连`;
+      setTimeout(connect, delay * 1000);
+    }
+
+    async function connect() {
+      if (!credential) {
+        connectionNode.textContent = '缺少配对凭据';
+        reconnectNode.textContent = '';
+        return;
+      }
+
+      try {
+        await verifyStatus();
+        const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        socket = new WebSocket(`${scheme}//${location.host}/ws/v1/events?access_token=${encodeURIComponent(credential)}`);
+        socket.onopen = () => { reconnectNode.textContent = '等待服务器确认'; };
+        socket.onmessage = event => {
+          let message;
+          try { message = JSON.parse(event.data); } catch { return; }
+          if (message.type === 'hello') {
+            reconnectAttempt = 0;
+            connectionNode.textContent = 'Connected';
+            connectionNode.className = 'ok';
+            deviceNode.textContent = `电脑：${message.deviceName || '—'}`;
+            protocolNode.textContent = String(message.protocolVersion || '—');
+            storageKey = `agentbell.lastSequence.${message.deviceId || 'default'}`;
+            sequenceNode.textContent = String(readLastSequence());
+            reconnectNode.textContent = '';
+            socket.send(JSON.stringify({ type: 'resume', lastSequence: readLastSequence() }));
+          } else if (message.type === 'event') {
+            addEvent(message.payload);
+          } else if (message.type === 'ping') {
+            socket.send(JSON.stringify({ type: 'pong', timestamp: message.timestamp }));
+          } else if (message.type === 'error') {
+            reconnectNode.textContent = `协议状态：${message.code || 'error'}`;
+          }
+        };
+        socket.onclose = () => {
+          connectionNode.textContent = '已断开';
+          connectionNode.className = 'warn';
+          scheduleReconnect();
+        };
+        socket.onerror = () => socket.close();
+      } catch {
+        connectionNode.textContent = '连接失败';
+        connectionNode.className = 'warn';
+        scheduleReconnect();
+      }
+    }
+
+    connect();
+  })();
+  </script>
+</body>
+</html>

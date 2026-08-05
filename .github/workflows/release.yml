@@ -1,0 +1,196 @@
+name: Guarded public beta release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without v prefix
+        required: true
+        default: 0.5.0-beta.1
+      dry_run:
+        description: Build and validate without creating a GitHub Release
+        required: true
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build verified release assets
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && vars.AGENTBELL_RELEASE_ENABLED == 'true')
+    runs-on: windows-2025
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      publish: ${{ steps.metadata.outputs.publish }}
+    steps:
+      - name: Checkout clean source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - name: Initialize release paths
+        shell: pwsh
+        run: |
+          $releaseTemp = Join-Path $env:RUNNER_TEMP 'agentbell-release'
+          $codexHome = Join-Path $releaseTemp 'codex-home'
+          $dataHome = Join-Path $releaseTemp 'data-home'
+          $keystorePath = Join-Path $releaseTemp 'agentbell-release.jks'
+          $certificatePath = Join-Path $releaseTemp 'agentbell-signing.pfx'
+
+          New-Item -ItemType Directory -Path @($releaseTemp, $codexHome, $dataHome) -Force | Out-Null
+
+          @(
+            "AGENTBELL_RELEASE_TEMP=$releaseTemp"
+            "CODEX_HOME=$codexHome"
+            "AGENTBELL_DATA_HOME=$dataHome"
+            "AGENTBELL_ANDROID_KEYSTORE=$keystorePath"
+            "AGENTBELL_WINDOWS_SIGN_CERTIFICATE=$certificatePath"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Setup JDK 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@da187c8e6ffbd3802e00f2477aa5a822b25f2dda # v4.4.4
+      - name: Validate tag and release metadata
+        id: metadata
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'push') {
+            '${{ github.ref_name }}'.Substring(1)
+          } else {
+            '${{ inputs.version }}'
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-beta\.\d+)?$') { throw 'Invalid release version.' }
+          $expected = Select-String -Path Directory.Build.props -Pattern '<AgentBellInformationalVersion>([^<]+)<'
+          if ($expected.Matches[0].Groups[1].Value -cne $version) { throw 'Tag/input does not match central version.' }
+          $dryRun = '${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.dry_run }}' -eq 'true'
+          $publish = -not $dryRun -and '${{ vars.AGENTBELL_RELEASE_ENABLED }}' -eq 'true'
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "publish=$($publish.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - name: Materialize signing files in runner temp
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.AGENTBELL_ANDROID_KEYSTORE_BASE64 }}
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.AGENTBELL_WINDOWS_SIGN_CERTIFICATE_BASE64 }}
+        run: |
+          New-Item -ItemType Directory -Path $env:CODEX_HOME,$env:AGENTBELL_DATA_HOME -Force | Out-Null
+          if (-not [string]::IsNullOrWhiteSpace($env:ANDROID_KEYSTORE_BASE64)) {
+            [IO.File]::WriteAllBytes(
+              $env:AGENTBELL_ANDROID_KEYSTORE,
+              [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)) {
+            [IO.File]::WriteAllBytes(
+              $env:AGENTBELL_WINDOWS_SIGN_CERTIFICATE,
+              [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          }
+      - name: Build and validate assets
+        shell: pwsh
+        env:
+          AGENTBELL_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.AGENTBELL_ANDROID_KEYSTORE_PASSWORD }}
+          AGENTBELL_ANDROID_KEY_ALIAS: ${{ secrets.AGENTBELL_ANDROID_KEY_ALIAS }}
+          AGENTBELL_ANDROID_KEY_PASSWORD: ${{ secrets.AGENTBELL_ANDROID_KEY_PASSWORD }}
+          AGENTBELL_WINDOWS_SIGN_CERTIFICATE_PASSWORD: ${{ secrets.AGENTBELL_WINDOWS_SIGN_CERTIFICATE_PASSWORD }}
+          AGENTBELL_WINDOWS_TIMESTAMP_URL: ${{ vars.AGENTBELL_WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $publish = [System.Convert]::ToBoolean('${{ steps.metadata.outputs.publish }}')
+          $buildArguments = @{
+            Version = '${{ steps.metadata.outputs.version }}'
+            Clean = $true
+            DryRun = -not $publish
+          }
+
+          & .\scripts\build-release.ps1 @buildArguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release build failed with exit code $LASTEXITCODE."
+          }
+      - name: Upload verified staging artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agentbell-release-${{ steps.metadata.outputs.version }}
+          path: artifacts/release/v${{ steps.metadata.outputs.version }}/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Delete temporary signing files
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($path in @(
+            $env:AGENTBELL_ANDROID_KEYSTORE,
+            $env:AGENTBELL_WINDOWS_SIGN_CERTIFICATE
+          )) {
+            if (-not [string]::IsNullOrWhiteSpace($path) -and
+              (Test-Path -LiteralPath $path -PathType Leaf)) {
+              Remove-Item -LiteralPath $path -Force
+            }
+          }
+
+  provenance:
+    name: Optional GitHub artifact attestation
+    needs: build
+    if: needs.build.outputs.publish == 'true' && vars.AGENTBELL_ATTESTATIONS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download verified assets
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: agentbell-release-${{ needs.build.outputs.version }}
+          path: release-assets
+      - name: Attest Setup and APK provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: |
+            release-assets/AgentBell-Setup-${{ needs.build.outputs.version }}.exe
+            release-assets/AgentBell-Android-${{ needs.build.outputs.version }}.apk
+
+  publish:
+    name: Publish draft-first GitHub pre-release
+    needs: [build, provenance]
+    if: >-
+      always() && needs.build.outputs.publish == 'true' &&
+      (needs.provenance.result == 'success' || needs.provenance.result == 'skipped')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified assets
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: agentbell-release-${{ needs.build.outputs.version }}
+          path: release-assets
+      - name: Assert public asset whitelist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "release-assets/AgentBell-Setup-${{ needs.build.outputs.version }}.exe"
+          test -s "release-assets/AgentBell-Android-${{ needs.build.outputs.version }}.apk"
+          ! find release-assets -type f \( -iname '*debug*' -o -iname '*.pdb' -o -iname '*.jks' -o -iname '*.pfx' \) | grep -q .
+      - name: Create draft, upload all assets, then publish as prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.build.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" --draft --prerelease --verify-tag \
+            --title "AgentBell $TAG" --notes-file release-assets/RELEASE_NOTES.md
+          gh release upload "$TAG" release-assets/* --clobber
+          gh release edit "$TAG" --draft=false --prerelease

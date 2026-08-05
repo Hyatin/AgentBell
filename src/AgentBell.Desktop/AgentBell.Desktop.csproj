@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>AgentBell.Desktop</AssemblyName>
+    <RootNamespace>AgentBell.Desktop</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgentBell.Desktop.Core\AgentBell.Desktop.Core.csproj" />
+  </ItemGroup>
+</Project>

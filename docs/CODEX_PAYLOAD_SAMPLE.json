@@ -1,0 +1,10 @@
+{
+  "type": "agent-turn-complete",
+  "thread-id": "thread-123",
+  "turn-id": "turn-456",
+  "cwd": "C:\\Projects\\AgentBell",
+  "input-messages": [
+    "Implement the Codex event probe."
+  ],
+  "last-assistant-message": "Implemented the event probe and all tests pass."
+}

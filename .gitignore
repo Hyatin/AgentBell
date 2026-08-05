@@ -1,0 +1,21 @@
+
+# Generated release and build artifacts
+/artifacts/
+/installer/Output/
+/installer/output/
+**/bin/
+**/obj/
+**/TestResults/
+/android/AgentBell/.gradle/
+/android/AgentBell/.kotlin/
+/android/AgentBell/**/build/
+/android/AgentBell/local.properties
+*.apk
+*.aab
+*.apks
+*.jks
+*.keystore
+*.pfx
+*.p12
+*.pdb
+*.ndjson

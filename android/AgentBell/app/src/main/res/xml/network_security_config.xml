@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Android XML cannot express dynamic RFC1918 subnets. Every URL is therefore
+         constructed only after PairingUrlParser validates a numeric private IPv4,
+         a bounded port, and a fixed AgentBell path. No arbitrary URL API is exposed. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

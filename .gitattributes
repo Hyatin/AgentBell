@@ -1,0 +1,3 @@
+android/AgentBell/gradlew text eol=lf*.sh text eol=lf
+android/AgentBell/gradlew text eol=lf
+*.sh text eol=lf

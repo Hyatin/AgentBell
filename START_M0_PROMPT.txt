@@ -1,0 +1,15 @@
+阅读仓库根目录的 AGENTS.md 和 docs/DEVELOPMENT_SPEC.md。
+
+现在只执行 M0：Codex 事件探针。不要实现 Desktop、WebSocket、Android、安装器或 Claude 支持。
+
+要求：
+1. 创建最小的 .NET 10 solution。
+2. 创建 AgentBell.Contracts、AgentBell.Hook 和对应测试项目。
+3. 实现对 Codex notify 单个 JSON 参数的健壮解析。
+4. 只处理 type=agent-turn-complete。
+5. 默认不写入原始 JSON或消息正文。
+6. 实现可通过环境变量启用的脱敏诊断日志。
+7. HTTP 转发接口可以先定义，但 M0 使用可替换接口和测试替身；不要实现 Desktop。
+8. 添加完整单元测试。
+9. 添加 docs/M0_MANUAL_TEST.md，写明如何手动配置 ~/.codex/config.toml、如何测试、如何恢复配置。
+10. 完成后运行 build 和 test，并报告结果、剩余风险以及下一步，但不要自动开始 M1。

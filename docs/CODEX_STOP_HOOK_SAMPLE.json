@@ -1,0 +1,10 @@
+{
+  "session_id": "session-stop-sample-123",
+  "turn_id": "turn-stop-sample-456",
+  "cwd": "G:\\Codex\\AgentBell",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "M0 Stop Hook 样例已完成 🔔",
+  "stop_hook_active": false,
+  "permission_mode": "default",
+  "model": "gpt-5"
+}

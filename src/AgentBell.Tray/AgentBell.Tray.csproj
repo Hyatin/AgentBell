@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>AgentBell.Tray</AssemblyName>
+    <RootNamespace>AgentBell.Tray</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AgentBell.Contracts\AgentBell.Contracts.csproj" />
+    <ProjectReference Include="..\AgentBell.Desktop.Core\AgentBell.Desktop.Core.csproj" />
+    <ProjectReference Include="..\AgentBell.Integration\AgentBell.Integration.csproj" />
+  </ItemGroup>
+</Project>
