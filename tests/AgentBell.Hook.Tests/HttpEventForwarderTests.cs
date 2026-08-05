@@ -58,6 +58,62 @@ public sealed class HttpEventForwarderTests
     }
 
     [Fact]
+    public void ForwardTimeoutResolver_RequiresTestModeAndAcceptsOnlyBoundedMilliseconds()
+    {
+        static string? Read(
+            string name,
+            string? testMode,
+            string? timeout) => name switch
+            {
+                HookEndpointResolver.TestModeEnvironmentVariable => testMode,
+                HookEndpointResolver.TestForwardTimeoutEnvironmentVariable => timeout,
+                _ => null,
+            };
+
+        var isolated = HookEndpointResolver.ResolveTestForwardTimeout(
+            name => Read(name, "1", "5000"));
+        var production = HookEndpointResolver.ResolveTestForwardTimeout(
+            name => Read(name, null, "5000"));
+        var tooLarge = HookEndpointResolver.ResolveTestForwardTimeout(
+            name => Read(name, "1", "10001"));
+        var invalid = HookEndpointResolver.ResolveTestForwardTimeout(
+            name => Read(name, "1", "invalid"));
+
+        Assert.Equal(TimeSpan.FromSeconds(5), isolated);
+        Assert.Null(production);
+        Assert.Null(tooLarge);
+        Assert.Null(invalid);
+    }
+
+    [Fact]
+    public void ConnectTimeoutResolver_RequiresTestModeAndAcceptsOnlyBoundedMilliseconds()
+    {
+        static string? Read(
+            string name,
+            string? testMode,
+            string? timeout) => name switch
+            {
+                HookEndpointResolver.TestModeEnvironmentVariable => testMode,
+                HookEndpointResolver.TestConnectTimeoutEnvironmentVariable => timeout,
+                _ => null,
+            };
+
+        var isolated = HookEndpointResolver.ResolveTestConnectTimeout(
+            name => Read(name, "1", "2000"));
+        var production = HookEndpointResolver.ResolveTestConnectTimeout(
+            name => Read(name, null, "2000"));
+        var tooLarge = HookEndpointResolver.ResolveTestConnectTimeout(
+            name => Read(name, "1", "5001"));
+        var invalid = HookEndpointResolver.ResolveTestConnectTimeout(
+            name => Read(name, "1", "invalid"));
+
+        Assert.Equal(TimeSpan.FromSeconds(2), isolated);
+        Assert.Null(production);
+        Assert.Null(tooLarge);
+        Assert.Null(invalid);
+    }
+
+    [Fact]
     public async Task ForwardAsync_NonSuccess_ReturnsRejectedWithoutExceptionText()
     {
         var handler = new StubHttpMessageHandler((_, _) =>

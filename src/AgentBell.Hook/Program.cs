@@ -4,7 +4,8 @@ try
 {
     using var handler = new SocketsHttpHandler
     {
-        ConnectTimeout = TimeSpan.FromMilliseconds(100),
+        ConnectTimeout = HookEndpointResolver.ResolveTestConnectTimeout()
+            ?? TimeSpan.FromMilliseconds(100),
         UseProxy = false,
     };
     using var httpClient = new HttpClient(handler)
@@ -16,7 +17,9 @@ try
         new HookInputResolver(),
         new CodexPayloadParser(),
         new CodexStopHookPayloadParser(),
-        new HttpEventForwarder(httpClient),
+        new HttpEventForwarder(
+            httpClient,
+            HookEndpointResolver.ResolveTestForwardTimeout()),
         DiagnosticLoggerFactory.CreateFromEnvironment());
 
     return await application.RunAsync(

@@ -9,6 +9,12 @@ public static class HookEndpointResolver
     /// <summary>Supplies the isolated loopback test Host port.</summary>
     public const string TestLoopbackPortEnvironmentVariable = "AGENTBELL_TEST_LOOPBACK_PORT";
 
+    /// <summary>Supplies a bounded total forwarding timeout only to isolated test processes.</summary>
+    public const string TestForwardTimeoutEnvironmentVariable = "AGENTBELL_TEST_FORWARD_TIMEOUT_MS";
+
+    /// <summary>Supplies a bounded connection timeout only to isolated test processes.</summary>
+    public const string TestConnectTimeoutEnvironmentVariable = "AGENTBELL_TEST_CONNECT_TIMEOUT_MS";
+
     /// <summary>The immutable production ingestion endpoint.</summary>
     public static Uri ProductionEndpoint { get; } =
         new("http://127.0.0.1:17863/api/v1/events/codex");
@@ -34,5 +40,46 @@ public static class HookEndpointResolver
                 ? parsedPort
                 : 1;
         return new Uri($"http://127.0.0.1:{port}/api/v1/events/codex");
+    }
+
+    /// <summary>
+    /// Resolves a bounded timeout only when explicit test mode is enabled. Production
+    /// and invalid test values retain the forwarder's established default.
+    /// </summary>
+    public static TimeSpan? ResolveTestForwardTimeout(
+        Func<string, string?>? environmentReader = null)
+        => ResolveTestTimeout(
+            TestForwardTimeoutEnvironmentVariable,
+            maximumMilliseconds: 10_000,
+            environmentReader);
+
+    /// <summary>Resolves a bounded loopback connection timeout only in explicit test mode.</summary>
+    public static TimeSpan? ResolveTestConnectTimeout(
+        Func<string, string?>? environmentReader = null)
+        => ResolveTestTimeout(
+            TestConnectTimeoutEnvironmentVariable,
+            maximumMilliseconds: 5_000,
+            environmentReader);
+
+    private static TimeSpan? ResolveTestTimeout(
+        string variableName,
+        int maximumMilliseconds,
+        Func<string, string?>? environmentReader)
+    {
+        environmentReader ??= Environment.GetEnvironmentVariable;
+        if (!string.Equals(
+                environmentReader(TestModeEnvironmentVariable),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var value = environmentReader(variableName);
+        return int.TryParse(value, out var milliseconds)
+               && milliseconds >= 100
+               && milliseconds <= maximumMilliseconds
+            ? TimeSpan.FromMilliseconds(milliseconds)
+            : null;
     }
 }
