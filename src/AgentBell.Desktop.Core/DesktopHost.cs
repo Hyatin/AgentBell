@@ -196,7 +196,7 @@ public sealed record DesktopRuntimeOptions
             return;
         }
 
-        ValidateTestPort(LoopbackPort, nameof(LoopbackPort));
+        ValidateTestPort(LoopbackPort, nameof(LoopbackPort), allowDynamic: true);
         ValidateTestPort(LanFirstPort, nameof(LanFirstPort));
         ValidateTestPort(LanLastPort, nameof(LanLastPort));
         if (LanFirstPort > LanLastPort
@@ -213,8 +213,16 @@ public sealed record DesktopRuntimeOptions
         return int.TryParse(value, out port) && port is >= 1024 and <= 65535;
     }
 
-    private static void ValidateTestPort(int port, string parameterName)
+    private static void ValidateTestPort(
+        int port,
+        string parameterName,
+        bool allowDynamic = false)
     {
+        if (allowDynamic && port == 0)
+        {
+            return;
+        }
+
         if (port is < 1024 or > 65535 || port == DesktopHost.ListenPort)
         {
             throw new ArgumentOutOfRangeException(parameterName);

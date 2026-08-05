@@ -1,17 +1,24 @@
 using System.Diagnostics;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using AgentBell.Hook;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace AgentBell.Desktop.Tests;
 
 public sealed class DesktopHostIntegrationTests
 {
+    private static readonly TimeSpan HostStartupTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan ReadinessRequestTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ReadinessPollInterval = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan BusinessRequestTimeout = TimeSpan.FromSeconds(10);
+
     [Fact]
     public async Task DesktopHost_FullHookChain_BindsOnlyIpv4LoopbackAndPreservesUnavailableBehavior()
     {
@@ -28,10 +35,10 @@ public sealed class DesktopHostIntegrationTests
             Path.GetTempPath(),
             $"AgentBell-Desktop-Integration-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
-        var isolatedPort = GetIsolatedPort();
         var eventsPath = Path.Combine(directory, "events.json");
         var successLogPath = Path.Combine(directory, "hook-success.ndjson");
         var unavailableLogPath = Path.Combine(directory, "hook-unavailable.ndjson");
+        var boundPort = 0;
 
         try
         {
@@ -40,11 +47,11 @@ public sealed class DesktopHostIntegrationTests
                 {
                     TestIsolationEnabled = true,
                     EventsFilePath = eventsPath,
-                    LoopbackPort = isolatedPort,
+                    LoopbackPort = 0,
                 }))
             {
                 await DesktopHost.InitializeAsync(application, CancellationToken.None);
-                await application.StartAsync();
+                await StartApplicationAsync(application, HostStartupTimeout);
 
                 var addresses = application.Services
                     .GetRequiredService<IServer>()
@@ -52,14 +59,24 @@ public sealed class DesktopHostIntegrationTests
                     .Get<IServerAddressesFeature>()?
                     .Addresses;
                 var address = Assert.Single(addresses ?? []);
-                Assert.Equal($"http://127.0.0.1:{isolatedPort}", address);
+                var listenerUri = new Uri(address);
+                boundPort = listenerUri.Port;
+                Assert.Equal(Uri.UriSchemeHttp, listenerUri.Scheme);
+                Assert.Equal(IPAddress.Loopback.ToString(), listenerUri.Host);
+                Assert.InRange(boundPort, 1, 65535);
+                Assert.Equal($"http://127.0.0.1:{boundPort}", address);
                 Assert.DoesNotContain("0.0.0.0", address, StringComparison.Ordinal);
                 Assert.DoesNotContain("[::]", address, StringComparison.Ordinal);
 
-                using var client = new HttpClient
+                var endpoint = new Uri(listenerUri, DesktopHttpContract.EventsPath);
+                var lifetime = application.Services.GetRequiredService<IHostApplicationLifetime>();
+                await WaitUntilReadyAsync(endpoint, lifetime, ReadinessTimeout);
+
+                using var handler = new SocketsHttpHandler { UseProxy = false };
+                using var client = new HttpClient(handler)
                 {
-                    BaseAddress = new Uri($"http://127.0.0.1:{isolatedPort}"),
-                    Timeout = TimeSpan.FromSeconds(2),
+                    BaseAddress = listenerUri,
+                    Timeout = BusinessRequestTimeout,
                 };
                 using var getResponse = await client.GetAsync(DesktopHttpContract.EventsPath);
                 Assert.Equal(405, (int)getResponse.StatusCode);
@@ -68,7 +85,7 @@ public sealed class DesktopHostIntegrationTests
                     Json,
                     successLogPath,
                     directory,
-                    isolatedPort);
+                    boundPort);
                 Assert.Equal(0, hookResult.ExitCode);
                 Assert.Equal(HookApplication.StopHookContinueResponse, hookResult.StandardOutput);
                 Assert.Equal(string.Empty, hookResult.StandardError);
@@ -93,14 +110,16 @@ public sealed class DesktopHostIntegrationTests
                 Assert.DoesNotContain("integration-private-turn", persistedText, StringComparison.Ordinal);
                 Assert.DoesNotContain("C:\\Private\\IntegrationProject", persistedText, StringComparison.Ordinal);
 
-                await application.StopAsync();
+                using var stopTimeout = new CancellationTokenSource(BusinessRequestTimeout);
+                await application.StopAsync(stopTimeout.Token);
             }
 
+            Assert.InRange(boundPort, 1, 65535);
             var unavailableResult = await RunHookProcessAsync(
                 Json,
                 unavailableLogPath,
                 directory,
-                isolatedPort);
+                boundPort);
             Assert.Equal(0, unavailableResult.ExitCode);
             Assert.Equal(HookApplication.StopHookContinueResponse, unavailableResult.StandardOutput);
             Assert.Equal(string.Empty, unavailableResult.StandardError);
@@ -122,6 +141,117 @@ public sealed class DesktopHostIntegrationTests
             }
         }
     }
+
+    private static async Task StartApplicationAsync(WebApplication application, TimeSpan timeout)
+    {
+        var target = new Uri($"http://127.0.0.1:0{DesktopHttpContract.EventsPath}");
+        var stopwatch = Stopwatch.StartNew();
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        try
+        {
+            await application.StartAsync(timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                CreateHostDiagnostic(target, stopwatch.Elapsed, "startup_timeout", "none"));
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                CreateHostDiagnostic(
+                    target,
+                    stopwatch.Elapsed,
+                    "startup_failed",
+                    exception.GetType().Name));
+        }
+    }
+
+    private static async Task WaitUntilReadyAsync(
+        Uri endpoint,
+        IHostApplicationLifetime lifetime,
+        TimeSpan timeout)
+    {
+        using var handler = new SocketsHttpHandler
+        {
+            ConnectTimeout = ReadinessRequestTimeout,
+            UseProxy = false,
+        };
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var stopwatch = Stopwatch.StartNew();
+        var lastFailure = "none";
+
+        while (stopwatch.Elapsed < timeout)
+        {
+            var hostState = GetHostState(lifetime);
+            if (!string.Equals(hostState, "running", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    CreateHostDiagnostic(endpoint, stopwatch.Elapsed, hostState, lastFailure));
+            }
+
+            var remaining = timeout - stopwatch.Elapsed;
+            using var attemptTimeout = new CancellationTokenSource(
+                remaining < ReadinessRequestTimeout ? remaining : ReadinessRequestTimeout);
+            try
+            {
+                using var response = await client.GetAsync(
+                    endpoint,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    attemptTimeout.Token);
+                if (response.StatusCode == HttpStatusCode.MethodNotAllowed)
+                {
+                    return;
+                }
+
+                lastFailure = $"http_{(int)response.StatusCode}";
+            }
+            catch (OperationCanceledException) when (attemptTimeout.IsCancellationRequested)
+            {
+                lastFailure = "request_timeout";
+            }
+            catch (HttpRequestException exception)
+            {
+                lastFailure = exception.GetType().Name;
+            }
+
+            remaining = timeout - stopwatch.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            await Task.Delay(
+                remaining < ReadinessPollInterval ? remaining : ReadinessPollInterval);
+        }
+
+        throw new TimeoutException(
+            CreateHostDiagnostic(endpoint, stopwatch.Elapsed, GetHostState(lifetime), lastFailure));
+    }
+
+    private static string GetHostState(IHostApplicationLifetime lifetime)
+    {
+        if (lifetime.ApplicationStopped.IsCancellationRequested)
+        {
+            return "stopped";
+        }
+
+        if (lifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            return "stopping";
+        }
+
+        return lifetime.ApplicationStarted.IsCancellationRequested ? "running" : "starting";
+    }
+
+    private static string CreateHostDiagnostic(
+        Uri endpoint,
+        TimeSpan elapsed,
+        string hostState,
+        string lastFailure) =>
+        $"Desktop Host readiness failed. Target={endpoint}; "
+        + $"WaitedMs={elapsed.TotalMilliseconds:F0}; HostState={hostState}; "
+        + $"LastFailure={lastFailure}.";
 
     private static async Task<HookProcessResult> RunHookProcessAsync(
         string stdin,
@@ -169,21 +299,6 @@ public sealed class DesktopHostIntegrationTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await process.WaitForExitAsync(timeout.Token);
         return new HookProcessResult(process.ExitCode, await outputTask, await errorTask);
-    }
-
-    private static int GetIsolatedPort()
-    {
-        while (true)
-        {
-            using var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
-            if (port != DesktopHost.ListenPort && !LanPortRange.Contains(port))
-            {
-                return port;
-            }
-        }
     }
 
     private sealed record HookProcessResult(
