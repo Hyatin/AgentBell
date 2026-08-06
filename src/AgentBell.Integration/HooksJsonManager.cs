@@ -14,11 +14,18 @@ public sealed partial class HooksJsonManager
     };
 
     private readonly TimeProvider _timeProvider;
+    private readonly HooksFileSystem _fileSystem;
 
     /// <summary>Initializes a manager with a replaceable clock for backup tests.</summary>
     public HooksJsonManager(TimeProvider? timeProvider = null)
+        : this(timeProvider, new HooksFileSystem())
+    {
+    }
+
+    internal HooksJsonManager(TimeProvider? timeProvider, HooksFileSystem fileSystem)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
     }
 
     /// <summary>Returns integration state without modifying any file.</summary>
@@ -57,8 +64,26 @@ public sealed partial class HooksJsonManager
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(hooksPath);
         ArgumentNullException.ThrowIfNull(commands);
-        var path = Path.GetFullPath(hooksPath);
+        var path = WindowsPathCanonicalizer.Canonicalize(hooksPath);
         cancellationToken.ThrowIfCancellationRequested();
+        var hooksFileExistedBefore = _fileSystem.FileExists(path);
+        var backupCandidateCount = CountBackupCandidates(path);
+
+        var result = await ExecuteCoreAsync(operation, path, commands, cancellationToken)
+            .ConfigureAwait(false);
+        return result with
+        {
+            HooksFileExistedBefore = hooksFileExistedBefore,
+            BackupCandidateCount = backupCandidateCount,
+        };
+    }
+
+    private async Task<CodexIntegrationResult> ExecuteCoreAsync(
+        HooksOperation operation,
+        string path,
+        HookCommands commands,
+        CancellationToken cancellationToken)
+    {
 
         var load = await LoadAsync(path, cancellationToken).ConfigureAwait(false);
         if (!load.Success)
@@ -68,12 +93,20 @@ public sealed partial class HooksJsonManager
                 changed: false,
                 CodexIntegrationState.Unknown,
                 load.Code,
-                path);
+                path) with
+            {
+                Stage = "load",
+                CompletedStages = [],
+            };
         }
 
         if (!load.Exists && operation is HooksOperation.Status or HooksOperation.Uninstall)
         {
-            return Result(true, false, CodexIntegrationState.Missing, "hook_missing", path);
+            return Result(true, false, CodexIntegrationState.Missing, "hook_missing", path) with
+            {
+                Stage = "skipped_missing",
+                CompletedStages = ["loaded", "skipped_missing"],
+            };
         }
 
         var root = load.Root ?? new JsonObject();
@@ -86,7 +119,11 @@ public sealed partial class HooksJsonManager
                 CodexIntegrationState.Unknown,
                 "hooks_structure_invalid",
                 path,
-                analysis.Candidates.Count);
+                analysis.Candidates.Count) with
+            {
+                Stage = "analyze",
+                CompletedStages = ["loaded"],
+            };
         }
 
         var state = DetermineState(analysis.Candidates, commands);
@@ -117,7 +154,11 @@ public sealed partial class HooksJsonManager
                 state,
                 "manual_review_required",
                 path,
-                analysis.Candidates.Count);
+                analysis.Candidates.Count) with
+            {
+                Stage = "analyze",
+                CompletedStages = ["loaded", "analyzed"],
+            };
         }
 
         var trustReviewRequired = false;
@@ -125,7 +166,11 @@ public sealed partial class HooksJsonManager
         {
             if (analysis.Candidates.Count == 0)
             {
-                return Result(true, false, CodexIntegrationState.Missing, "hook_missing", path);
+                return Result(true, false, CodexIntegrationState.Missing, "hook_missing", path) with
+                {
+                    Stage = "skipped_missing",
+                    CompletedStages = ["loaded", "analyzed", "skipped_missing"],
+                };
             }
 
             RemoveCandidate(root, analysis.Candidates[0]);
@@ -152,7 +197,13 @@ public sealed partial class HooksJsonManager
             }
         }
 
-        var write = await WriteAsync(path, root, load.Exists, cancellationToken).ConfigureAwait(false);
+        var write = await WriteAsync(
+            operation,
+            path,
+            root,
+            commands,
+            load.Exists,
+            cancellationToken).ConfigureAwait(false);
         if (!write.Success)
         {
             return Result(
@@ -161,7 +212,26 @@ public sealed partial class HooksJsonManager
                 CodexIntegrationState.Unknown,
                 write.Code,
                 path,
-                analysis.Candidates.Count);
+                analysis.Candidates.Count) with
+            {
+                BackupPath = write.BackupPath,
+                TemporaryPath = write.TemporaryPath,
+                Stage = write.Stage,
+                CompletedStages = write.CompletedStages,
+                RollbackAttempted = write.RollbackAttempted,
+                RollbackSucceeded = write.RollbackSucceeded,
+            };
+        }
+
+        if (operation == HooksOperation.Uninstall && write.Code == "hook_missing")
+        {
+            return Result(true, false, CodexIntegrationState.Missing, "hook_missing", path) with
+            {
+                BackupPath = write.BackupPath,
+                TemporaryPath = write.TemporaryPath,
+                Stage = write.Stage,
+                CompletedStages = write.CompletedStages,
+            };
         }
 
         return new CodexIntegrationResult
@@ -174,8 +244,14 @@ public sealed partial class HooksJsonManager
             Code = operation == HooksOperation.Uninstall ? "uninstalled" : "installed",
             HooksPath = path,
             BackupPath = write.BackupPath,
+            TemporaryPath = write.TemporaryPath,
             AgentBellHookCount = operation == HooksOperation.Uninstall ? 0 : 1,
+            AgentBellHookCountBefore = analysis.Candidates.Count,
             TrustReviewRequired = trustReviewRequired,
+            Stage = write.Stage,
+            CompletedStages = write.CompletedStages,
+            RollbackAttempted = write.RollbackAttempted,
+            RollbackSucceeded = write.RollbackSucceeded,
         };
     }
 
@@ -348,19 +424,19 @@ public sealed partial class HooksJsonManager
         string path,
         CancellationToken cancellationToken)
     {
-        if (!File.Exists(path))
-        {
-            return new HooksLoadResult(true, false, new JsonObject(), "success");
-        }
-
         try
         {
-            if (new FileInfo(path).Length > MaximumHooksFileBytes)
+            if (!_fileSystem.FileExists(path))
+            {
+                return new HooksLoadResult(true, false, new JsonObject(), "success");
+            }
+
+            if (_fileSystem.GetFileLength(path) > MaximumHooksFileBytes)
             {
                 return new HooksLoadResult(false, true, null, "hooks_file_too_large");
             }
 
-            var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            var bytes = await _fileSystem.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
             var node = JsonNode.Parse(
                 bytes,
                 new JsonNodeOptions { PropertyNameCaseInsensitive = false },
@@ -389,35 +465,45 @@ public sealed partial class HooksJsonManager
     }
 
     private async Task<HooksWriteResult> WriteAsync(
+        HooksOperation operation,
         string path,
         JsonObject root,
+        HookCommands commands,
         bool existed,
         CancellationToken cancellationToken)
     {
         var directory = Path.GetDirectoryName(path);
         if (string.IsNullOrWhiteSpace(directory))
         {
-            return new HooksWriteResult(false, null, "hooks_path_invalid");
+            return HooksWriteResult.Failure("hooks_path_invalid", null, null, "prepare", []);
         }
 
         string? backupPath = null;
         var temporaryPath = $"{path}.agentbell-tmp-{Guid.NewGuid():N}";
+        var completedStages = new List<string>();
+        var stage = "prepare";
+        var commitStarted = false;
         try
         {
-            Directory.CreateDirectory(directory);
-            if (existed)
+            if (operation == HooksOperation.Uninstall
+                && (!_fileSystem.DirectoryExists(directory) || !_fileSystem.FileExists(path)))
             {
-                backupPath = NextBackupPath(path);
-                File.Copy(path, backupPath, overwrite: false);
+                completedStages.Add("skipped_missing");
+                return HooksWriteResult.SkippedMissing(temporaryPath, completedStages);
             }
 
-            await using (var stream = new FileStream(
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                16 * 1024,
-                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            _fileSystem.CreateDirectory(directory);
+            completedStages.Add("parent_ready");
+            if (existed)
+            {
+                stage = "backup";
+                backupPath = NextBackupPath(path);
+                _fileSystem.CopyFile(path, backupPath, overwrite: false);
+                completedStages.Add("backup_created");
+            }
+
+            stage = "temporary_write";
+            await using (var stream = _fileSystem.CreateWriteThroughFile(temporaryPath))
             {
                 await JsonSerializer.SerializeAsync(
                     stream,
@@ -427,17 +513,65 @@ public sealed partial class HooksJsonManager
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                 stream.Flush(flushToDisk: true);
             }
+            completedStages.Add("temporary_flushed");
 
+            stage = existed ? "atomic_replace" : "atomic_create";
+            commitStarted = true;
             if (existed)
             {
-                File.Replace(temporaryPath, path, null, ignoreMetadataErrors: true);
+                _fileSystem.ReplaceFile(temporaryPath, path);
             }
             else
             {
-                File.Move(temporaryPath, path);
+                _fileSystem.MoveFile(temporaryPath, path);
+            }
+            completedStages.Add(existed ? "formal_replaced" : "formal_created");
+
+            stage = "verify";
+            if (!await VerifyPersistedAsync(operation, path, commands, cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                if (operation == HooksOperation.Uninstall && !_fileSystem.FileExists(path))
+                {
+                    completedStages.Add("skipped_missing");
+                    return HooksWriteResult.SkippedMissing(
+                        temporaryPath,
+                        completedStages,
+                        backupPath);
+                }
+
+                var rollbackSucceeded = await RollbackAsync(
+                    path,
+                    backupPath,
+                    existed,
+                    cancellationToken).ConfigureAwait(false);
+                if (rollbackSucceeded)
+                {
+                    completedStages.Add("rollback_completed");
+                }
+
+                return HooksWriteResult.Failure(
+                    rollbackSucceeded
+                        ? "hooks_verification_failed"
+                        : "hooks_verification_failed_rollback_failed",
+                    backupPath,
+                    temporaryPath,
+                    "verify",
+                    completedStages,
+                    rollbackAttempted: true,
+                    rollbackSucceeded);
             }
 
-            return new HooksWriteResult(true, backupPath, "success");
+            completedStages.Add("verified");
+            return new HooksWriteResult(
+                true,
+                backupPath,
+                temporaryPath,
+                "completed",
+                completedStages,
+                false,
+                false,
+                "success");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -450,20 +584,161 @@ public sealed partial class HooksJsonManager
             or NotSupportedException
             or JsonException)
         {
-            return new HooksWriteResult(false, backupPath, "hooks_write_failed");
+            if (operation == HooksOperation.Uninstall && !_fileSystem.FileExists(path))
+            {
+                completedStages.Add("skipped_missing");
+                return HooksWriteResult.SkippedMissing(
+                    temporaryPath,
+                    completedStages,
+                    backupPath);
+            }
+
+            var rollbackAttempted = commitStarted;
+            var rollbackSucceeded = false;
+            if (rollbackAttempted)
+            {
+                rollbackSucceeded = await RollbackAsync(
+                    path,
+                    backupPath,
+                    existed,
+                    cancellationToken).ConfigureAwait(false);
+                if (rollbackSucceeded)
+                {
+                    completedStages.Add("rollback_completed");
+                }
+            }
+
+            return HooksWriteResult.Failure(
+                rollbackAttempted && !rollbackSucceeded
+                    ? "hooks_write_failed_rollback_failed"
+                    : "hooks_write_failed",
+                backupPath,
+                temporaryPath,
+                stage,
+                completedStages,
+                rollbackAttempted,
+                rollbackSucceeded);
         }
         finally
         {
             try
             {
-                if (File.Exists(temporaryPath))
+                if (_fileSystem.FileExists(temporaryPath))
                 {
-                    File.Delete(temporaryPath);
+                    _fileSystem.DeleteFile(temporaryPath);
                 }
             }
             catch
             {
                 // Temporary cleanup cannot change the operation result.
+            }
+        }
+    }
+
+    private async Task<bool> VerifyPersistedAsync(
+        HooksOperation operation,
+        string path,
+        HookCommands commands,
+        CancellationToken cancellationToken)
+    {
+        var load = await LoadAsync(path, cancellationToken).ConfigureAwait(false);
+        if (!load.Success || !load.Exists || load.Root is null)
+        {
+            return false;
+        }
+
+        var analysis = Analyze(load.Root, commands);
+        if (!analysis.StructureValid)
+        {
+            return false;
+        }
+
+        return operation == HooksOperation.Uninstall
+            ? analysis.Candidates.Count == 0
+            : analysis.Candidates.Count == 1
+                && DetermineState(analysis.Candidates, commands) == CodexIntegrationState.Installed;
+    }
+
+    private async Task<bool> RollbackAsync(
+        string path,
+        string? backupPath,
+        bool existed,
+        CancellationToken cancellationToken)
+    {
+        var rollbackTemporaryPath = $"{path}.agentbell-rollback-{Guid.NewGuid():N}";
+        try
+        {
+            if (!existed)
+            {
+                if (_fileSystem.FileExists(path))
+                {
+                    _fileSystem.DeleteFile(path);
+                }
+
+                return !_fileSystem.FileExists(path);
+            }
+
+            if (string.IsNullOrWhiteSpace(backupPath) || !_fileSystem.FileExists(backupPath))
+            {
+                return false;
+            }
+
+            var backupBytes = await _fileSystem.ReadAllBytesAsync(backupPath, cancellationToken)
+                .ConfigureAwait(false);
+            if (_fileSystem.FileExists(path))
+            {
+                var currentBytes = await _fileSystem.ReadAllBytesAsync(path, cancellationToken)
+                    .ConfigureAwait(false);
+                if (currentBytes.AsSpan().SequenceEqual(backupBytes))
+                {
+                    return true;
+                }
+            }
+
+            await using (var stream = _fileSystem.CreateWriteThroughFile(rollbackTemporaryPath))
+            {
+                await stream.WriteAsync(backupBytes, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+
+            if (_fileSystem.FileExists(path))
+            {
+                _fileSystem.ReplaceFile(rollbackTemporaryPath, path);
+            }
+            else
+            {
+                _fileSystem.MoveFile(rollbackTemporaryPath, path);
+            }
+
+            var restoredBytes = await _fileSystem.ReadAllBytesAsync(path, cancellationToken)
+                .ConfigureAwait(false);
+            return restoredBytes.AsSpan().SequenceEqual(backupBytes);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException)
+        {
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                if (_fileSystem.FileExists(rollbackTemporaryPath))
+                {
+                    _fileSystem.DeleteFile(rollbackTemporaryPath);
+                }
+            }
+            catch
+            {
+                // Rollback temporary cleanup cannot expose file content or change the result.
             }
         }
     }
@@ -474,7 +749,7 @@ public sealed partial class HooksJsonManager
         while (true)
         {
             var candidate = $"{hooksPath}.agentbell-backup-{timestamp:yyyyMMdd-HHmmss}";
-            if (!File.Exists(candidate))
+            if (!_fileSystem.FileExists(candidate))
             {
                 return candidate;
             }
@@ -483,12 +758,31 @@ public sealed partial class HooksJsonManager
         }
     }
 
+    private int CountBackupCandidates(string hooksPath)
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(hooksPath);
+            var fileName = Path.GetFileName(hooksPath);
+            return string.IsNullOrWhiteSpace(directory)
+                || string.IsNullOrWhiteSpace(fileName)
+                || !_fileSystem.DirectoryExists(directory)
+                ? 0
+                : _fileSystem.EnumerateFiles(directory, $"{fileName}.*backup-*").Count();
+        }
+        catch (Exception exception) when (
+            exception is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException)
+        {
+            return 0;
+        }
+    }
+
     private static CandidateKind ClassifyPath(string candidatePath, string desiredPath)
     {
-        if (string.Equals(
-            Path.GetFullPath(candidatePath),
-            Path.GetFullPath(desiredPath),
-            StringComparison.OrdinalIgnoreCase))
+        if (WindowsPathCanonicalizer.AreEquivalent(candidatePath, desiredPath))
         {
             return CandidateKind.Current;
         }
@@ -565,7 +859,10 @@ public sealed partial class HooksJsonManager
             Code = code,
             HooksPath = hooksPath,
             AgentBellHookCount = hookCount,
+            AgentBellHookCountBefore = hookCount,
             TrustReviewRequired = false,
+            Stage = "completed",
+            CompletedStages = ["loaded", "analyzed"],
         };
 
     [GeneratedRegex("(?:^|\\s)--codex-stop-hook(?:\\s|\"|$)", RegexOptions.CultureInvariant)]
@@ -602,5 +899,46 @@ public sealed partial class HooksJsonManager
 
     private sealed record HooksLoadResult(bool Success, bool Exists, JsonObject? Root, string Code);
 
-    private sealed record HooksWriteResult(bool Success, string? BackupPath, string Code);
+    private sealed record HooksWriteResult(
+        bool Success,
+        string? BackupPath,
+        string? TemporaryPath,
+        string Stage,
+        IReadOnlyList<string> CompletedStages,
+        bool RollbackAttempted,
+        bool RollbackSucceeded,
+        string Code)
+    {
+        internal static HooksWriteResult SkippedMissing(
+            string? temporaryPath,
+            IReadOnlyList<string> completedStages,
+            string? backupPath = null) =>
+            new(
+                true,
+                backupPath,
+                temporaryPath,
+                "skipped_missing",
+                completedStages,
+                false,
+                false,
+                "hook_missing");
+
+        internal static HooksWriteResult Failure(
+            string code,
+            string? backupPath,
+            string? temporaryPath,
+            string stage,
+            IReadOnlyList<string> completedStages,
+            bool rollbackAttempted = false,
+            bool rollbackSucceeded = false) =>
+            new(
+                false,
+                backupPath,
+                temporaryPath,
+                stage,
+                completedStages,
+                rollbackAttempted,
+                rollbackSucceeded,
+                code);
+    }
 }

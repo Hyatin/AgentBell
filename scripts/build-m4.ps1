@@ -382,6 +382,10 @@ try {
     else {
         $iscc = Resolve-InnoCompiler
         $isccVersion = (Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion
+        $parsedIsccVersion = [Version]($isccVersion.Split('+')[0].Split('-')[0])
+        if ($parsedIsccVersion -lt [Version]'6.4.0') {
+            throw "Inno Setup 6.4.0 or newer is required for safe stdout/stderr capture; detected $isccVersion."
+        }
         Write-Host "Inno Setup compiler: $iscc ($isccVersion)"
     }
 

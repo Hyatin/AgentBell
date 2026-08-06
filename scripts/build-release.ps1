@@ -46,6 +46,8 @@ $androidVersionName = $null
 $androidVersionCode = $null
 $installerBuilt = $false
 
+. (Join-Path $PSScriptRoot 'InnoSetupVersion.ps1')
+
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
 }
@@ -302,18 +304,60 @@ function Get-ApkPackageReport([string]$Aapt2, [string]$ApkPath) {
 }
 
 function Resolve-InnoCompiler {
-    if (-not [string]::IsNullOrWhiteSpace($env:ISCC_PATH) -and
-        (Test-Path -LiteralPath $env:ISCC_PATH -PathType Leaf)) {
-        return [System.IO.Path]::GetFullPath($env:ISCC_PATH)
+    $candidatePaths = New-Object System.Collections.Generic.List[string]
+    $useOnlyExplicitCandidate = -not [string]::IsNullOrWhiteSpace($env:ISCC_PATH) -and
+        (Test-Path -LiteralPath $env:ISCC_PATH -PathType Leaf)
+    if ($useOnlyExplicitCandidate) {
+        $candidatePaths.Add([System.IO.Path]::GetFullPath($env:ISCC_PATH))
     }
-    $command = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue
-    if ($null -ne $command) { return $command.Source }
-    $roots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    foreach ($root in $roots) {
-        $candidate = Join-Path $root 'Inno Setup 6\ISCC.exe'
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    else {
+        $command = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue
+        if ($null -ne $command) { $candidatePaths.Add($command.Source) }
+        $roots = @(
+            $env:LOCALAPPDATA,
+            $env:ProgramFiles,
+            ${env:ProgramFiles(x86)}
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        foreach ($root in $roots) {
+            foreach ($relativePath in @('Programs\Inno Setup 6\ISCC.exe', 'Inno Setup 6\ISCC.exe')) {
+                $candidate = Join-Path $root $relativePath
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                    $candidatePaths.Add([System.IO.Path]::GetFullPath($candidate))
+                }
+            }
+        }
     }
-    throw 'ISCC.exe was not found. Set ISCC_PATH or install Inno Setup 6.'
+
+    $registryCandidates = @(Get-AgentBellInnoSetupRegistryCandidates)
+    if (-not $useOnlyExplicitCandidate) {
+        foreach ($registryCandidate in $registryCandidates) {
+            if ([string]::IsNullOrWhiteSpace([string]$registryCandidate.InstallLocation)) {
+                continue
+            }
+            $candidate = Join-Path ([string]$registryCandidate.InstallLocation) 'ISCC.exe'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $candidatePaths.Add([System.IO.Path]::GetFullPath($candidate))
+            }
+        }
+    }
+
+    $uniquePaths = @($candidatePaths.ToArray() | Select-Object -Unique)
+    if ($uniquePaths.Count -eq 0) {
+        throw 'ISCC.exe was not found. Set ISCC_PATH or install Inno Setup 6.4.0 or newer.'
+    }
+
+    $compilerCandidates = @($uniquePaths | ForEach-Object {
+        $versionInfo = (Get-Item -LiteralPath $_).VersionInfo
+        [pscustomobject]@{
+            Path = $_
+            ProductVersion = $versionInfo.ProductVersion
+            FileVersion = $versionInfo.FileVersion
+        }
+    })
+    return Select-AgentBellInnoSetupCompilerVersion `
+        -CompilerCandidates $compilerCandidates `
+        -RegistryCandidates $registryCandidates `
+        -MinimumVersion ([Version]'6.4.0')
 }
 
 function Resolve-SignTool {
@@ -523,7 +567,11 @@ try {
         $packageAndroid = Join-Path $packageRoot 'android'
         New-Item -ItemType Directory -Path $packageAndroid -Force | Out-Null
         Copy-Item -LiteralPath $packagedApk -Destination (Join-Path $packageAndroid $androidAssetName)
-        $iscc = Resolve-InnoCompiler
+        $isccVersionResolution = Resolve-InnoCompiler
+        $iscc = $isccVersionResolution.IsccPath
+        Write-Host (
+            "Inno Setup compiler: $iscc ($($isccVersionResolution.Version), " +
+            "source=$($isccVersionResolution.Source))")
         Invoke-Checked $iscc @(
             "/DSourceDir=$packageRoot", "/DOutputDir=$installerRoot",
             "/DProductVersion=$productVersion", "/DInformationalVersion=$Version",
@@ -532,6 +580,10 @@ try {
         ) 'Inno Setup compilation failed.'
         $builtSetup = Join-Path $installerRoot $setupAssetName
         if (-not (Test-Path -LiteralPath $builtSetup -PathType Leaf)) { throw 'Setup output is missing.' }
+        Write-Step 'Testing isolated Codex fresh install, upgrade, rollback, and Setup exit codes'
+        & (Join-Path $PSScriptRoot 'test-codex-installer-integration.ps1') `
+            -IntegrationExe (Join-Path $packageRoot 'AgentBell.Integration.exe') `
+            -SetupPath $builtSetup
         if ($windowsSigningAvailable) {
             Sign-WindowsFile $builtSetup $signTool
             $setupSigned = $true

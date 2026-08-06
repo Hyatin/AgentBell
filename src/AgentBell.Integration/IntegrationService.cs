@@ -15,13 +15,13 @@ public sealed class IntegrationService
         HooksJsonManager? hooksManager = null,
         HookCommandBuilder? commandBuilder = null)
     {
-        _hookExecutablePath = Path.GetFullPath(hookExecutablePath);
+        _hookExecutablePath = WindowsPathCanonicalizer.Canonicalize(hookExecutablePath);
         _homeResolver = homeResolver ?? new CodexHomeResolver();
         _hooksManager = hooksManager ?? new HooksJsonManager();
         _commandBuilder = commandBuilder ?? new HookCommandBuilder();
     }
 
-    /// <summary>Executes install, repair, status, or uninstall.</summary>
+    /// <summary>Executes install, repair, status, verification, or uninstall.</summary>
     public async Task<CodexIntegrationResult> ExecuteAsync(
         string operation,
         CancellationToken cancellationToken)
@@ -41,10 +41,15 @@ public sealed class IntegrationService
         }
         catch (ArgumentException)
         {
-            return Failure("hook_path_invalid", resolution.HooksPath);
+            return Failure("hook_path_invalid", resolution.HooksPath) with
+            {
+                CodexHomePath = resolution.HomePath,
+                Stage = "hook_validation",
+                CompletedStages = ["codex_home_resolved"],
+            };
         }
 
-        if (operation is "install" or "repair")
+        if (operation is "install" or "repair" or "verify")
         {
             if (!File.Exists(_hookExecutablePath))
             {
@@ -57,6 +62,9 @@ public sealed class IntegrationService
                     HooksPath = resolution.HooksPath,
                     AgentBellHookCount = 0,
                     TrustReviewRequired = false,
+                    CodexHomePath = resolution.HomePath,
+                    Stage = "hook_validation",
+                    CompletedStages = ["codex_home_resolved"],
                 };
             }
 
@@ -70,7 +78,12 @@ public sealed class IntegrationService
                 or ArgumentException
                 or NotSupportedException)
             {
-                return Failure("codex_home_unavailable", resolution.HooksPath);
+                return Failure("codex_home_unavailable", resolution.HooksPath) with
+                {
+                    CodexHomePath = resolution.HomePath,
+                    Stage = "parent_create",
+                    CompletedStages = ["codex_home_resolved"],
+                };
             }
         }
 
@@ -85,6 +98,10 @@ public sealed class IntegrationService
                 commands,
                 cancellationToken).ConfigureAwait(false),
             "status" => await _hooksManager.StatusAsync(
+                resolution.HooksPath,
+                commands,
+                cancellationToken).ConfigureAwait(false),
+            "verify" => await VerifyAsync(
                 resolution.HooksPath,
                 commands,
                 cancellationToken).ConfigureAwait(false),
@@ -107,7 +124,34 @@ public sealed class IntegrationService
             };
         }
 
-        return result;
+        return result with
+        {
+            CodexHomePath = resolution.HomePath,
+        };
+    }
+
+    private async Task<CodexIntegrationResult> VerifyAsync(
+        string hooksPath,
+        HookCommands commands,
+        CancellationToken cancellationToken)
+    {
+        var status = await _hooksManager.StatusAsync(hooksPath, commands, cancellationToken)
+            .ConfigureAwait(false);
+        return status.State == CodexIntegrationState.Installed
+            && status.AgentBellHookCount == 1
+            ? status with
+            {
+                Success = true,
+                Code = "verified",
+                Stage = "completed",
+                CompletedStages = ["loaded", "analyzed", "verified"],
+            }
+            : status with
+            {
+                Success = false,
+                Code = "verification_failed",
+                Stage = "verify",
+            };
     }
 
     private static CodexIntegrationResult Failure(string code, string? hooksPath) =>
@@ -120,5 +164,6 @@ public sealed class IntegrationService
             HooksPath = hooksPath,
             AgentBellHookCount = 0,
             TrustReviewRequired = false,
+            Stage = "resolve",
         };
 }

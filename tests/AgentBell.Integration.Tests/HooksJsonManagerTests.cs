@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Runtime.InteropServices;
 
 namespace AgentBell.Integration.Tests;
 
@@ -198,6 +199,116 @@ public sealed class HooksJsonManagerTests
     }
 
     [Fact]
+    public async Task Uninstall_MissingHooksFile_IsSuccessfulIdempotentSkip()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hooks.json");
+
+        var result = await Manager.UninstallAsync(path, Commands, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(result.Changed);
+        Assert.Equal("hook_missing", result.Code);
+        Assert.Equal("skipped_missing", result.Stage);
+        Assert.False(result.HooksFileExistedBefore);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task Uninstall_OnlyTimestampedBackupsExist_DoesNotRestoreOrDeleteThem()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hooks.json");
+        var managedBackup = $"{path}.agentbell-backup-20260805-010203";
+        var manualBackup = $"{path}.manual-backup-20260805-010204";
+        WriteUtf8(managedBackup, "{}");
+        WriteUtf8(manualBackup, "{}");
+
+        var result = await Manager.UninstallAsync(path, Commands, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("hook_missing", result.Code);
+        Assert.Equal(2, result.BackupCandidateCount);
+        Assert.True(File.Exists(managedBackup));
+        Assert.True(File.Exists(manualBackup));
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task Uninstall_InvalidJson_PreservesExactBytesAndReportsFailure()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hooks.json");
+        var bytes = Encoding.UTF8.GetBytes("{not-valid-json");
+        await File.WriteAllBytesAsync(path, bytes);
+
+        var result = await Manager.UninstallAsync(path, Commands, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("hooks_json_invalid", result.Code);
+        Assert.True(result.HooksFileExistedBefore);
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(path));
+        Assert.Empty(Directory.GetFiles(directory.Path, "*.agentbell-backup-*"));
+    }
+
+    [Fact]
+    public async Task Uninstall_DevelopmentM0Hook_RemovesOnlyKnownAgentBellDefinition()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hooks.json");
+        WriteUtf8(path, """
+            {"hooks":{"Stop":[
+              {"hooks":[{"type":"command","command":"other-tool.exe --stop"}]},
+              {"hooks":[{"type":"command","command":"G:\\Repository\\AgentBell\\artifacts\\m0-hook\\AgentBell.Hook.exe --codex-stop-hook"}]}
+            ]}}
+            """);
+
+        var result = await Manager.UninstallAsync(path, Commands, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("uninstalled", result.Code);
+        var root = ReadRoot(path);
+        var group = Assert.Single(root["hooks"]!["Stop"]!.AsArray());
+        Assert.Equal("other-tool.exe --stop", group!["hooks"]![0]!["command"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Uninstall_RepeatedCleanup_SecondRunIsSuccessfulSkipAndCreatesNoBackup()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hooks.json");
+        await Manager.InstallAsync(path, Commands, CancellationToken.None);
+
+        var first = await Manager.UninstallAsync(path, Commands, CancellationToken.None);
+        var backupCount = Directory.GetFiles(directory.Path, "*.agentbell-backup-*").Length;
+        var second = await Manager.UninstallAsync(path, Commands, CancellationToken.None);
+
+        Assert.True(first.Success);
+        Assert.Equal("uninstalled", first.Code);
+        Assert.True(second.Success);
+        Assert.False(second.Changed);
+        Assert.Equal("hook_missing", second.Code);
+        Assert.Equal(backupCount, Directory.GetFiles(directory.Path, "*.agentbell-backup-*").Length);
+    }
+
+    [Fact]
+    public async Task Uninstall_HooksFileDisappearsAfterLoad_ReturnsSuccessfulSkipWithoutRecreatingIt()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hooks.json");
+        WriteRepairableHook(path);
+        var manager = new HooksJsonManager(null, new DeleteBeforeUninstallWriteFileSystem(path));
+
+        var result = await manager.UninstallAsync(path, Commands, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.False(result.Changed);
+        Assert.Equal("hook_missing", result.Code);
+        Assert.Equal("skipped_missing", result.Stage);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
     public async Task Operations_NeverChangeConfigTomlOrNotify()
     {
         using var directory = new TemporaryDirectory();
@@ -237,6 +348,126 @@ public sealed class HooksJsonManagerTests
         Assert.Equal("C:\\Users\\Example\\.codex\\hooks.json", result.HooksPath);
     }
 
+    [Fact]
+    public void CodexHomeResolver_DefaultUserProfileCanBeOnNonSystemDrive()
+    {
+        var resolver = new CodexHomeResolver(_ => null, _ => "E:\\Users\\Example");
+
+        var result = resolver.Resolve();
+
+        Assert.True(result.IsAvailable);
+        Assert.Equal("E:\\Users\\Example\\.codex\\hooks.json", result.HooksPath);
+    }
+
+    [Fact]
+    public async Task Repair_ReadOnlyHooksFile_PreservesOriginalBytesAndReportsWriteStage()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hooks.json");
+        WriteRepairableHook(path);
+        var original = await File.ReadAllBytesAsync(path);
+        File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
+        try
+        {
+            var result = await Manager.RepairAsync(path, Commands, CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.StartsWith("hooks_write_failed", result.Code, StringComparison.Ordinal);
+            Assert.Equal(original, await File.ReadAllBytesAsync(path));
+            Assert.NotEqual("completed", result.Stage);
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+    }
+
+    [Fact]
+    public async Task Repair_TemporaryWriteFailure_LeavesFormalFileUnchanged()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hooks.json");
+        WriteRepairableHook(path);
+        var original = await File.ReadAllBytesAsync(path);
+        var manager = new HooksJsonManager(null, new TemporaryWriteFailureFileSystem());
+
+        var result = await manager.RepairAsync(path, Commands, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("hooks_write_failed", result.Code);
+        Assert.Equal("temporary_write", result.Stage);
+        Assert.False(result.RollbackAttempted);
+        Assert.Equal(original, await File.ReadAllBytesAsync(path));
+        Assert.Empty(Directory.GetFiles(directory.Path, "*.agentbell-tmp-*"));
+    }
+
+    [Fact]
+    public async Task Repair_AtomicReplaceFailure_RestoresBackupBytes()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "hooks.json");
+        WriteRepairableHook(path);
+        var original = await File.ReadAllBytesAsync(path);
+        var manager = new HooksJsonManager(null, new DestructiveReplaceFailureFileSystem());
+
+        var result = await manager.RepairAsync(path, Commands, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("hooks_write_failed", result.Code);
+        Assert.Equal("atomic_replace", result.Stage);
+        Assert.True(result.RollbackAttempted);
+        Assert.True(result.RollbackSucceeded);
+        Assert.Equal(original, await File.ReadAllBytesAsync(path));
+        Assert.NotNull(result.BackupPath);
+        Assert.Equal(original, await File.ReadAllBytesAsync(result.BackupPath));
+    }
+
+    [Fact]
+    public void WindowsPathCanonicalizer_ExistingLongAndShortPathsReferToSameFile()
+    {
+        using var directory = new TemporaryDirectory();
+        var longDirectory = Path.Combine(directory.Path, "Long Directory 中文");
+        Directory.CreateDirectory(longDirectory);
+        var longPath = Path.Combine(longDirectory, "AgentBell.Hook.exe");
+        File.WriteAllBytes(longPath, [0x4d, 0x5a]);
+        var shortPath = TryGetShortPath(longPath);
+
+        Assert.True(WindowsPathCanonicalizer.AreEquivalent(longPath, longPath));
+        if (shortPath is not null)
+        {
+            Assert.True(WindowsPathCanonicalizer.AreEquivalent(longPath, shortPath));
+        }
+    }
+
+    [Fact]
+    public void CodexHomeResolver_ExpandsEnvironmentVariablesBeforeCanonicalizing()
+    {
+        using var directory = new TemporaryDirectory();
+        const string VariableName = "AGENTBELL_CODEX_HOME_TEST_ROOT";
+        var prior = Environment.GetEnvironmentVariable(VariableName);
+        try
+        {
+            Environment.SetEnvironmentVariable(VariableName, directory.Path);
+            var resolver = new CodexHomeResolver(
+                name => name == CodexHomeResolver.CodexHomeEnvironmentVariable
+                    ? $"%{VariableName}%\\codex home"
+                    : null,
+                _ => string.Empty);
+
+            var result = resolver.Resolve();
+
+            Assert.True(result.IsAvailable);
+            Assert.Equal(
+                Path.Combine(directory.Path, "codex home", "hooks.json"),
+                result.HooksPath,
+                ignoreCase: true);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(VariableName, prior);
+        }
+    }
+
     private static HooksJsonManager Manager { get; } = new();
 
     private static HookCommands Commands { get; } = new HookCommandBuilder().Build(
@@ -247,6 +478,89 @@ public sealed class HooksJsonManagerTests
 
     private static void WriteUtf8(string path, string value) =>
         File.WriteAllText(path, value, new UTF8Encoding(false));
+
+    private static void WriteRepairableHook(string path)
+    {
+        var root = new JsonObject
+        {
+            ["hooks"] = new JsonObject
+            {
+                ["Stop"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["hooks"] = new JsonArray
+                        {
+                            new JsonObject
+                            {
+                                ["type"] = "command",
+                                ["command"] = Commands.Command,
+                                ["commandWindows"] = Commands.CommandWindows,
+                                ["timeout"] = 1,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+        WriteUtf8(path, root.ToJsonString());
+    }
+
+    private static string? TryGetShortPath(string path)
+    {
+        var required = GetShortPathName(path, null, 0);
+        if (required == 0)
+        {
+            return null;
+        }
+
+        var buffer = new StringBuilder(checked((int)required));
+        var written = GetShortPathName(path, buffer, required);
+        return written == 0 || written >= required ? null : buffer.ToString();
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "GetShortPathNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetShortPathName(string longPath, StringBuilder? shortPath, uint bufferLength);
+
+    private sealed class TemporaryWriteFailureFileSystem : HooksFileSystem
+    {
+        internal override FileStream CreateWriteThroughFile(string path) =>
+            throw new IOException("Injected temporary write failure.");
+    }
+
+    private sealed class DestructiveReplaceFailureFileSystem : HooksFileSystem
+    {
+        private bool _failureInjected;
+
+        internal override void ReplaceFile(string source, string destination)
+        {
+            if (!_failureInjected)
+            {
+                _failureInjected = true;
+                File.WriteAllText(destination, "corrupt", new UTF8Encoding(false));
+                throw new IOException("Injected atomic replace failure.");
+            }
+
+            base.ReplaceFile(source, destination);
+        }
+    }
+
+    private sealed class DeleteBeforeUninstallWriteFileSystem(string hooksPath) : HooksFileSystem
+    {
+        private int _hooksExistenceChecks;
+
+        internal override bool FileExists(string path)
+        {
+            if (string.Equals(path, hooksPath, StringComparison.OrdinalIgnoreCase)
+                && Interlocked.Increment(ref _hooksExistenceChecks) == 3)
+            {
+                File.Delete(path);
+                return false;
+            }
+
+            return base.FileExists(path);
+        }
+    }
 
     private sealed class TemporaryDirectory : IDisposable
     {

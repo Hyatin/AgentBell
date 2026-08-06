@@ -18,13 +18,45 @@ public static class IntegrationProgram
     {
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentNullException.ThrowIfNull(output);
-        var json = arguments.Any(value => string.Equals(value, "--json", StringComparison.Ordinal));
-        var commands = arguments
-            .Where(value => !string.Equals(value, "--json", StringComparison.Ordinal))
-            .ToArray();
+        var json = false;
+        string? operation = null;
+        string? explicitCodexHome = null;
+        var invalidArguments = false;
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (string.Equals(argument, "--json", StringComparison.Ordinal))
+            {
+                json = true;
+                continue;
+            }
 
-        if (commands.Length != 1
-            || commands[0] is not ("install" or "repair" or "status" or "uninstall" or "version"))
+            if (string.Equals(argument, "--codex-home", StringComparison.Ordinal))
+            {
+                if (explicitCodexHome is not null
+                    || index + 1 >= arguments.Count
+                    || string.IsNullOrWhiteSpace(arguments[index + 1]))
+                {
+                    invalidArguments = true;
+                    break;
+                }
+
+                explicitCodexHome = arguments[++index];
+                continue;
+            }
+
+            if (operation is not null)
+            {
+                invalidArguments = true;
+                break;
+            }
+
+            operation = argument;
+        }
+
+        if (invalidArguments
+            || operation is not ("install" or "repair" or "status" or "verify" or "uninstall" or "version")
+            || (operation == "version" && explicitCodexHome is not null))
         {
             await WriteAsync(
                 output,
@@ -37,7 +69,7 @@ public static class IntegrationProgram
             return IntegrationExitCodes.InvalidArguments;
         }
 
-        if (commands[0] == "version")
+        if (operation == "version")
         {
             await WriteAsync(
                 output,
@@ -54,10 +86,12 @@ public static class IntegrationProgram
 
         try
         {
-            var hookPath = new AgentBellPathResolver()
-                .GetInstalledExecutablePath("AgentBell.Hook.exe");
-            var result = await new IntegrationService(hookPath)
-                .ExecuteAsync(commands[0], cancellationToken)
+            var hookPath = ResolveSiblingHookPath(AppContext.BaseDirectory);
+            var homeResolver = explicitCodexHome is null
+                ? null
+                : new CodexHomeResolver(_ => explicitCodexHome);
+            var result = await new IntegrationService(hookPath, homeResolver)
+                .ExecuteAsync(operation, cancellationToken)
                 .ConfigureAwait(false);
             await WriteAsync(output, json, result).ConfigureAwait(false);
             return ToExitCode(result);
@@ -76,10 +110,18 @@ public static class IntegrationProgram
                 Code = "unexpected_error",
                 AgentBellHookCount = 0,
                 TrustReviewRequired = false,
+                Stage = "unexpected_error",
             };
             await WriteAsync(output, json, result).ConfigureAwait(false);
             return IntegrationExitCodes.LocalOperationFailed;
         }
+    }
+
+    internal static string ResolveSiblingHookPath(string integrationDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(integrationDirectory);
+        return WindowsPathCanonicalizer.Canonicalize(
+            Path.Combine(integrationDirectory, "AgentBell.Hook.exe"));
     }
 
     private static int ToExitCode(CodexIntegrationResult result)

@@ -46,8 +46,35 @@ public sealed record CodexIntegrationResult
     /// <summary>Gets the number of strictly identified AgentBell handlers.</summary>
     public int AgentBellHookCount { get; init; }
 
+    /// <summary>Gets the number of strictly identified AgentBell handlers before mutation.</summary>
+    public int AgentBellHookCountBefore { get; init; }
+
+    /// <summary>Gets whether hooks.json existed when the operation began.</summary>
+    public bool HooksFileExistedBefore { get; init; }
+
+    /// <summary>Gets the number of timestamped hooks.json backup candidates found before the operation.</summary>
+    public int BackupCandidateCount { get; init; }
+
     /// <summary>Gets whether Codex may require review of a changed hook definition.</summary>
     public bool TrustReviewRequired { get; init; }
+
+    /// <summary>Gets the canonical Codex home used by this operation.</summary>
+    public string? CodexHomePath { get; init; }
+
+    /// <summary>Gets the same-directory temporary file path used by an attempted write.</summary>
+    public string? TemporaryPath { get; init; }
+
+    /// <summary>Gets the last stable processing stage reached.</summary>
+    public string Stage { get; init; } = "not_started";
+
+    /// <summary>Gets the ordered, non-sensitive stages completed by the operation.</summary>
+    public IReadOnlyList<string> CompletedStages { get; init; } = [];
+
+    /// <summary>Gets whether restoration of the pre-operation file was required.</summary>
+    public bool RollbackAttempted { get; init; }
+
+    /// <summary>Gets whether a required rollback restored the previous bytes.</summary>
+    public bool RollbackSucceeded { get; init; }
 }
 
 /// <summary>Provides stable process exit codes for installer and Tray automation.</summary>

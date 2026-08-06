@@ -9,4 +9,8 @@
   <ItemGroup>
     <ProjectReference Include="..\AgentBell.Contracts\AgentBell.Contracts.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AgentBell.Integration.Tests" />
+  </ItemGroup>
 </Project>

@@ -8,14 +8,17 @@ public sealed class CodexHomeResolver
 
     private readonly Func<string, string?> _environmentReader;
     private readonly Func<Environment.SpecialFolder, string> _folderReader;
+    private readonly Func<string, string> _pathCanonicalizer;
 
     /// <summary>Initializes a resolver with production or test environment readers.</summary>
     public CodexHomeResolver(
         Func<string, string?>? environmentReader = null,
-        Func<Environment.SpecialFolder, string>? folderReader = null)
+        Func<Environment.SpecialFolder, string>? folderReader = null,
+        Func<string, string>? pathCanonicalizer = null)
     {
         _environmentReader = environmentReader ?? Environment.GetEnvironmentVariable;
         _folderReader = folderReader ?? Environment.GetFolderPath;
+        _pathCanonicalizer = pathCanonicalizer ?? WindowsPathCanonicalizer.Canonicalize;
     }
 
     /// <summary>Resolves CODEX_HOME first, then the current profile's .codex directory.</summary>
@@ -27,7 +30,7 @@ public sealed class CodexHomeResolver
             string home;
             if (!string.IsNullOrWhiteSpace(configured))
             {
-                home = Path.GetFullPath(configured);
+                home = _pathCanonicalizer(configured);
             }
             else
             {
@@ -37,7 +40,7 @@ public sealed class CodexHomeResolver
                     return CodexHomeResolution.Failure("user_profile_unavailable");
                 }
 
-                home = Path.Combine(Path.GetFullPath(profile), ".codex");
+                home = _pathCanonicalizer(Path.Combine(profile, ".codex"));
             }
 
             return CodexHomeResolution.Available(
