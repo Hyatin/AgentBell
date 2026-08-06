@@ -1,10 +1,13 @@
 using System.Net;
 using System.Net.Http.Headers;
-using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using AgentBell.Contracts;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace AgentBell.Desktop.Tests;
 
@@ -246,45 +249,180 @@ public sealed class LanHostIntegrationTests
     [Fact]
     public async Task WebSocket_PingPongKeepsConnectionThenMissingPongTimesOut()
     {
-        await using var server = await LanTestServer.StartAsync(new WebSocketServerOptions
+        var options = new WebSocketServerOptions
         {
             MaximumClients = 5,
             QueueCapacity = 16,
-            PingInterval = TimeSpan.FromMilliseconds(50),
-            ClientTimeout = TimeSpan.FromMilliseconds(160),
-            InitialResumeGracePeriod = TimeSpan.FromMilliseconds(10),
-        });
-        using var socket = await server.ConnectWithQueryAsync();
-        _ = await ReceiveTextAsync(socket);
-
-        using var ping = JsonDocument.Parse(await ReceiveTextAsync(socket));
-        Assert.Equal("ping", ping.RootElement.GetProperty("type").GetString());
-        var timestamp = ping.RootElement.GetProperty("timestamp").GetInt64();
-        await SendTextAsync(
-            socket,
-            $"{{\"type\":\"pong\",\"timestamp\":{timestamp}}}");
-
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        var sawAnotherPing = false;
-        while (true)
+            PingInterval = TimeSpan.FromSeconds(5),
+            ClientTimeout = TimeSpan.FromSeconds(15),
+            InitialResumeGracePeriod = TimeSpan.FromSeconds(1),
+        };
+        var clock = new ManualTimeProvider(
+            new DateTimeOffset(2026, 8, 6, 0, 0, 0, TimeSpan.Zero));
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await using var server = await LanTestServer.StartAsync(
+            options,
+            watchdog.Token,
+            clock);
+        ClientWebSocket? socket = null;
+        var stage = "host_ready";
+        var pingCount = 0;
+        var pongSentCount = 0;
+        var pongConfirmedCount = 0;
+        DateTimeOffset? heartbeatDeadline = null;
+        string? serverCloseReason = null;
+        var closeFrameObserved = false;
+        try
         {
-            var buffer = new byte[4096];
-            var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), timeout.Token);
-            if (result.MessageType == WebSocketMessageType.Close)
+            Assert.True(server.IsRunning);
+
+            stage = "websocket_connect";
+            using (var connectLimit = CreatePhaseTimeout(watchdog.Token))
+            {
+                socket = await server.ConnectWithQueryAsync(connectLimit.Token);
+                Assert.Equal(WebSocketState.Open, socket.State);
+
+                stage = "hello_received";
+                using var hello = JsonDocument.Parse(
+                    await ReceiveTextAsync(socket, connectLimit.Token));
+                Assert.Equal("hello", hello.RootElement.GetProperty("type").GetString());
+            }
+
+            stage = "phase_a_first_ping";
+            long firstPingTimestamp;
+            using (var firstPingLimit = CreatePhaseTimeout(watchdog.Token))
+            {
+                await clock.WaitForPendingTimerAsync(firstPingLimit.Token);
+                clock.Advance(options.PingInterval);
+                using var firstPing = JsonDocument.Parse(
+                    await ReceiveTextAsync(socket, firstPingLimit.Token));
+                Assert.Equal("ping", firstPing.RootElement.GetProperty("type").GetString());
+                firstPingTimestamp = firstPing.RootElement.GetProperty("timestamp").GetInt64();
+                pingCount++;
+            }
+
+            stage = "phase_a_outstanding_ping_guard";
+            using (var outstandingPingLimit = CreatePhaseTimeout(watchdog.Token))
+            {
+                await clock.WaitForPendingTimerAsync(outstandingPingLimit.Token);
+                clock.Advance(options.PingInterval);
+            }
+
+            stage = "phase_a_pong_sent";
+            using (var pongSendLimit = CreatePhaseTimeout(watchdog.Token))
+            {
+                await SendTextAsync(
+                    socket,
+                    $"{{\"type\":\"pong\",\"timestamp\":{firstPingTimestamp}}}",
+                    pongSendLimit.Token);
+                pongSentCount++;
+            }
+
+            stage = "phase_a_pong_confirmed";
+            DesktopDiagnosticEvent pongConfirmation;
+            using (var pongConfirmationLimit = CreatePhaseTimeout(watchdog.Token))
+            {
+                pongConfirmation = await server.Logger.WaitForAsync(
+                    item => string.Equals(item.MessageType, "pong", StringComparison.Ordinal)
+                        && string.Equals(item.Result, "success", StringComparison.Ordinal),
+                    pongConfirmationLimit.Token);
+            }
+            pongConfirmedCount++;
+            heartbeatDeadline = pongConfirmation.Timestamp + options.ClientTimeout;
+            Assert.Equal(WebSocketState.Open, socket.State);
+            Assert.True(server.IsRunning);
+
+            stage = "phase_b_second_ping";
+            using (var secondPingLimit = CreatePhaseTimeout(watchdog.Token))
+            {
+                await clock.WaitForPendingTimerAsync(secondPingLimit.Token);
+                clock.Advance(options.PingInterval);
+                using var secondPing = JsonDocument.Parse(
+                    await ReceiveTextAsync(socket, secondPingLimit.Token));
+                Assert.Equal("ping", secondPing.RootElement.GetProperty("type").GetString());
+                pingCount++;
+            }
+
+            stage = "phase_b_missing_pong";
+            using var closeReceiveLimit = CreatePhaseTimeout(watchdog.Token);
+            var closeObservationTask = ReceiveCloseAsync(
+                socket,
+                messageType =>
+                {
+                    if (string.Equals(messageType, "ping", StringComparison.Ordinal))
+                    {
+                        Interlocked.Increment(ref pingCount);
+                    }
+                },
+                closeReceiveLimit.Token);
+
+            using (var heartbeatDeadlineLimit = CreatePhaseTimeout(watchdog.Token))
+            {
+                await clock.WaitForPendingTimerAsync(heartbeatDeadlineLimit.Token);
+                clock.Advance(options.ClientTimeout - options.PingInterval);
+            }
+
+            DesktopDiagnosticEvent timeoutDiagnostic;
+            using (var timeoutSignalLimit = CreatePhaseTimeout(watchdog.Token))
+            {
+                timeoutDiagnostic = await server.Logger.WaitForAsync(
+                    item => string.Equals(item.MessageType, "ping", StringComparison.Ordinal)
+                        && string.Equals(item.Result, "pong_timeout", StringComparison.Ordinal),
+                    timeoutSignalLimit.Token);
+            }
+            serverCloseReason = timeoutDiagnostic.Result;
+            Assert.True(timeoutDiagnostic.Timestamp >= pongConfirmation.Timestamp);
+
+            stage = "phase_b_server_close";
+            var closeObservation = await closeObservationTask;
+            closeFrameObserved = true;
+            Assert.Equal(WebSocketCloseStatus.PolicyViolation, closeObservation.Status);
+            Assert.Equal("pong_timeout", closeObservation.Description);
+
+            stage = "phase_b_close_ack";
+            using (var closeAckLimit = CreatePhaseTimeout(watchdog.Token))
             {
                 await socket.CloseOutputAsync(
                     WebSocketCloseStatus.NormalClosure,
                     "ack",
-                    CancellationToken.None);
-                break;
+                    closeAckLimit.Token);
             }
 
-            var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            using var document = JsonDocument.Parse(text);
-            sawAnotherPing |= document.RootElement.GetProperty("type").GetString() == "ping";
-        }
+            stage = "phase_b_disconnected";
+            using (var disconnectLimit = CreatePhaseTimeout(watchdog.Token))
+            {
+                await server.Logger.WaitForAsync(
+                    item => string.Equals(item.Result, "disconnected", StringComparison.Ordinal),
+                    disconnectLimit.Token);
+            }
 
-        Assert.True(sawAnotherPing);
+            Assert.Equal(0, server.Manager.ActiveConnectionCount);
+            Assert.True(server.IsRunning);
+            Assert.False(watchdog.IsCancellationRequested);
+            Assert.Equal(2, pingCount);
+            Assert.Equal(1, pongSentCount);
+            Assert.Equal(1, pongConfirmedCount);
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                CreateHeartbeatFailureDiagnostic(
+                    stage,
+                    socket,
+                    pingCount,
+                    pongSentCount,
+                    pongConfirmedCount,
+                    heartbeatDeadline,
+                    serverCloseReason,
+                    closeFrameObserved,
+                    server,
+                    watchdog.IsCancellationRequested),
+                exception);
+        }
+        finally
+        {
+            socket?.Dispose();
+        }
     }
 
     [Fact]
@@ -334,6 +472,82 @@ public sealed class LanHostIntegrationTests
             cancellationToken);
     }
 
+    private static CancellationTokenSource CreatePhaseTimeout(
+        CancellationToken watchdogToken)
+    {
+        var timeout = CancellationTokenSource.CreateLinkedTokenSource(watchdogToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        return timeout;
+    }
+
+    private static async Task<WebSocketCloseObservation> ReceiveCloseAsync(
+        ClientWebSocket socket,
+        Action<string> textMessageObserver,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[4096];
+        while (true)
+        {
+            using var message = new MemoryStream();
+            WebSocketReceiveResult result;
+            do
+            {
+                result = await socket.ReceiveAsync(
+                    new ArraySegment<byte>(buffer),
+                    cancellationToken);
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    return new WebSocketCloseObservation(
+                        result.CloseStatus,
+                        result.CloseStatusDescription);
+                }
+
+                message.Write(buffer, 0, result.Count);
+            }
+            while (!result.EndOfMessage);
+
+            if (result.MessageType != WebSocketMessageType.Text)
+            {
+                throw new WebSocketException("Unexpected non-text message before server close.");
+            }
+
+            using var document = JsonDocument.Parse(message.ToArray());
+            var messageType = document.RootElement.GetProperty("type").GetString()
+                ?? "missing";
+            textMessageObserver(messageType);
+        }
+    }
+
+    private static string CreateHeartbeatFailureDiagnostic(
+        string stage,
+        ClientWebSocket? socket,
+        int pingCount,
+        int pongSentCount,
+        int pongConfirmedCount,
+        DateTimeOffset? heartbeatDeadline,
+        string? serverCloseReason,
+        bool closeFrameObserved,
+        LanTestServer server,
+        bool watchdogTriggered)
+    {
+        var serverResults = server.Logger.Events
+            .Where(item => string.Equals(item.EventType, "websocket", StringComparison.Ordinal))
+            .Select(item => $"{item.MessageType ?? "lifecycle"}:{item.Result ?? "none"}")
+            .ToArray();
+        return $"WebSocket heartbeat test failed. Phase={stage}; "
+            + $"WebSocketState={socket?.State.ToString() ?? "not_created"}; "
+            + $"PingReceived={pingCount}; PongSent={pongSentCount}; "
+            + $"PongConfirmed={pongConfirmedCount}; "
+            + $"HeartbeatDeadline={heartbeatDeadline?.ToString("O") ?? "not_set"}; "
+            + $"ServerCloseReason={serverCloseReason ?? "not_recorded"}; "
+            + $"CloseFrameObserved={closeFrameObserved}; HostRunning={server.IsRunning}; "
+            + $"WatchdogTriggered={watchdogTriggered}; "
+            + $"ServerDiagnostics={string.Join(',', serverResults)}; "
+            + $"CurrentDisposeStage={server.DisposeStage}; "
+            + "DisposeOrder=client_receive_complete,client_socket_dispose,"
+            + "manager_close,host_stop,host_dispose,watchdog_dispose.";
+    }
+
     private static async Task<string> ReceiveTextAsync(
         ClientWebSocket socket,
         CancellationToken cancellationToken = default)
@@ -363,6 +577,198 @@ public sealed class LanHostIntegrationTests
             $"AgentBell-LAN-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         return directory;
+    }
+
+    private sealed record WebSocketCloseObservation(
+        WebSocketCloseStatus? Status,
+        string? Description);
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private readonly object _gate = new();
+        private readonly HashSet<ManualTimer> _timers = [];
+        private DateTimeOffset _utcNow;
+        private long _timestamp;
+        private TaskCompletionSource _timerAvailable = CreateSignal();
+
+        public ManualTimeProvider(DateTimeOffset utcNow)
+        {
+            _utcNow = utcNow;
+        }
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_gate)
+            {
+                return _utcNow;
+            }
+        }
+
+        public override long GetTimestamp()
+        {
+            lock (_gate)
+            {
+                return _timestamp;
+            }
+        }
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            ArgumentNullException.ThrowIfNull(callback);
+            var timer = new ManualTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            return timer;
+        }
+
+        public async Task WaitForPendingTimerAsync(CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                Task signal;
+                lock (_gate)
+                {
+                    if (_timers.Count > 0)
+                    {
+                        return;
+                    }
+
+                    signal = _timerAvailable.Task;
+                }
+
+                await signal.WaitAsync(cancellationToken);
+            }
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            if (elapsed < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(elapsed));
+            }
+
+            ManualTimer[] dueTimers;
+            lock (_gate)
+            {
+                _utcNow += elapsed;
+                _timestamp = checked(_timestamp + elapsed.Ticks);
+                dueTimers = _timers
+                    .Where(timer => timer.DueTimestamp <= _timestamp)
+                    .ToArray();
+                foreach (var timer in dueTimers)
+                {
+                    if (timer.PeriodTicks == Timeout.InfiniteTimeSpan.Ticks)
+                    {
+                        _timers.Remove(timer);
+                    }
+                    else
+                    {
+                        timer.DueTimestamp = checked(_timestamp + timer.PeriodTicks);
+                    }
+                }
+
+                ResetSignalIfEmpty();
+            }
+
+            foreach (var timer in dueTimers)
+            {
+                timer.Fire();
+            }
+        }
+
+        private bool ChangeTimer(ManualTimer timer, TimeSpan dueTime, TimeSpan period)
+        {
+            ValidateTimerDuration(dueTime, nameof(dueTime));
+            ValidateTimerDuration(period, nameof(period));
+            lock (_gate)
+            {
+                _timers.Remove(timer);
+                timer.PeriodTicks = period.Ticks;
+                if (dueTime != Timeout.InfiniteTimeSpan)
+                {
+                    timer.DueTimestamp = checked(_timestamp + dueTime.Ticks);
+                    _timers.Add(timer);
+                    _timerAvailable.TrySetResult();
+                }
+                else
+                {
+                    ResetSignalIfEmpty();
+                }
+
+                return true;
+            }
+        }
+
+        private void RemoveTimer(ManualTimer timer)
+        {
+            lock (_gate)
+            {
+                _timers.Remove(timer);
+                ResetSignalIfEmpty();
+            }
+        }
+
+        private void ResetSignalIfEmpty()
+        {
+            if (_timers.Count == 0 && _timerAvailable.Task.IsCompleted)
+            {
+                _timerAvailable = CreateSignal();
+            }
+        }
+
+        private static void ValidateTimerDuration(TimeSpan value, string parameterName)
+        {
+            if (value < TimeSpan.Zero && value != Timeout.InfiniteTimeSpan)
+            {
+                throw new ArgumentOutOfRangeException(parameterName);
+            }
+        }
+
+        private static TaskCompletionSource CreateSignal() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private sealed class ManualTimer(
+            ManualTimeProvider owner,
+            TimerCallback callback,
+            object? state) : ITimer
+        {
+            private int _disposed;
+
+            public long DueTimestamp { get; set; }
+
+            public long PeriodTicks { get; set; } = Timeout.InfiniteTimeSpan.Ticks;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) =>
+                Volatile.Read(ref _disposed) == 0
+                && owner.ChangeTimer(this, dueTime, period);
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                {
+                    owner.RemoveTimer(this);
+                }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+
+            public void Fire()
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                {
+                    callback(state);
+                }
+            }
+        }
     }
 
     private static void DeleteDirectory(string directory)
@@ -407,12 +813,27 @@ public sealed class LanHostIntegrationTests
 
         public Microsoft.AspNetCore.Builder.WebApplication Application { get; }
 
+        public string DisposeStage { get; private set; } = "not_started";
+
+        public bool IsRunning
+        {
+            get
+            {
+                var lifetime = Application.Services.GetRequiredService<IHostApplicationLifetime>();
+                return lifetime.ApplicationStarted.IsCancellationRequested
+                    && !lifetime.ApplicationStopping.IsCancellationRequested
+                    && !lifetime.ApplicationStopped.IsCancellationRequested;
+            }
+        }
+
         public Uri HttpBaseAddress => new($"http://127.0.0.1:{Port}");
 
         public Uri WebSocketAddress => new($"ws://127.0.0.1:{Port}{AgentBellProtocol.WebSocketPath}");
 
         public static async Task<LanTestServer> StartAsync(
-            WebSocketServerOptions? webSocketOptions = null)
+            WebSocketServerOptions? webSocketOptions = null,
+            CancellationToken cancellationToken = default,
+            TimeProvider? timeProvider = null)
         {
             var directory = CreateDirectory();
             PairingConfigurationSession? pairing = null;
@@ -423,24 +844,39 @@ public sealed class LanHostIntegrationTests
                 var logger = new CollectingDesktopDiagnosticLogger();
                 var manager = new WebSocketConnectionManager(
                     logger,
+                    timeProvider,
                     options: webSocketOptions);
                 var pipeline = new EventPipeline(
                     new InMemoryEventStore(),
                     new CodexEventTransformer(),
                     new WebSocketEventPublisher(manager));
                 await pipeline.InitializeAsync(CancellationToken.None);
-                var port = FindAvailablePort();
                 application = LanHost.BuildForTesting(
                     IPAddress.Loopback,
-                    port,
+                    0,
                     pairing,
                     pipeline,
                     manager,
                     logger);
-                await application.StartAsync();
+                await application.StartAsync(cancellationToken);
+                var addresses = application.Services
+                    .GetRequiredService<IServer>()
+                    .Features
+                    .Get<IServerAddressesFeature>()?
+                    .Addresses;
+                var address = Assert.Single(addresses ?? []);
+                var listener = new Uri(address);
+                Assert.Equal(IPAddress.Loopback.ToString(), listener.Host);
+                Assert.InRange(listener.Port, 1024, 65535);
+                using var handler = new SocketsHttpHandler { UseProxy = false };
+                using var client = new HttpClient(handler) { BaseAddress = listener };
+                using var health = await client.GetAsync(
+                    LanHost.HealthPath,
+                    cancellationToken);
+                Assert.Equal(HttpStatusCode.OK, health.StatusCode);
                 return new LanTestServer(
                     directory,
-                    port,
+                    listener.Port,
                     pairing,
                     pipeline,
                     logger,
@@ -472,42 +908,33 @@ public sealed class LanHostIntegrationTests
                 },
                 CancellationToken.None);
 
-        public async Task<ClientWebSocket> ConnectWithQueryAsync()
+        public async Task<ClientWebSocket> ConnectWithQueryAsync(
+            CancellationToken cancellationToken = default)
         {
             var socket = new ClientWebSocket();
             await socket.ConnectAsync(
                 new Uri($"{WebSocketAddress}?access_token={Pairing.Token.Value}"),
-                CancellationToken.None);
+                cancellationToken);
             return socket;
         }
 
         public async ValueTask DisposeAsync()
         {
-            await Manager.CloseAllAsync(CancellationToken.None);
+            DisposeStage = "manager_close";
+            using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await Manager.CloseAllAsync(shutdown.Token);
             try
             {
-                await Application.StopAsync();
+                DisposeStage = "host_stop";
+                await Application.StopAsync(shutdown.Token);
             }
             finally
             {
+                DisposeStage = "host_dispose";
                 await Application.DisposeAsync();
                 Pairing.Dispose();
                 DeleteDirectory(_directory);
-            }
-        }
-
-        private static int FindAvailablePort()
-        {
-            while (true)
-            {
-                using var listener = new TcpListener(IPAddress.Loopback, 0);
-                listener.Start();
-                var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-                listener.Stop();
-                if (port != DesktopHost.ListenPort && !LanPortRange.Contains(port))
-                {
-                    return port;
-                }
+                DisposeStage = "completed";
             }
         }
     }

@@ -702,7 +702,10 @@ public sealed class WebSocketConnectionManager
             if (!root.TryGetProperty("timestamp", out var timestampElement)
                 || timestampElement.ValueKind != JsonValueKind.Number
                 || !timestampElement.TryGetInt64(out var timestamp)
-                || timestamp != Interlocked.Read(ref _lastPingTimestamp))
+                || Interlocked.CompareExchange(
+                    ref _lastPingTimestamp,
+                    value: 0,
+                    comparand: timestamp) != timestamp)
             {
                 TryEnqueue(new ErrorMessage { Code = "invalid_message" });
                 return;
@@ -749,10 +752,26 @@ public sealed class WebSocketConnectionManager
                     return;
                 }
 
+                if (Interlocked.Read(ref _lastPingTimestamp) != 0)
+                {
+                    continue;
+                }
+
                 var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-                Interlocked.Exchange(ref _lastPingTimestamp, now);
+                if (Interlocked.CompareExchange(
+                        ref _lastPingTimestamp,
+                        value: now,
+                        comparand: 0) != 0)
+                {
+                    continue;
+                }
+
                 if (!TryEnqueue(new PingMessage { Timestamp = now }))
                 {
+                    Interlocked.CompareExchange(
+                        ref _lastPingTimestamp,
+                        value: 0,
+                        comparand: now);
                     AbortSlowClient();
                     return;
                 }

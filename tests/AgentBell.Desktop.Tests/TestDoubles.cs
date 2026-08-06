@@ -58,6 +58,7 @@ internal sealed class CollectingDesktopDiagnosticLogger : IDesktopDiagnosticLogg
 {
     private readonly object _gate = new();
     private readonly List<DesktopDiagnosticEvent> _events = [];
+    private readonly List<DiagnosticWaiter> _waiters = [];
 
     public IReadOnlyList<DesktopDiagnosticEvent> Events
     {
@@ -75,8 +76,62 @@ internal sealed class CollectingDesktopDiagnosticLogger : IDesktopDiagnosticLogg
         lock (_gate)
         {
             _events.Add(diagnosticEvent);
+            for (var index = _waiters.Count - 1; index >= 0; index--)
+            {
+                var waiter = _waiters[index];
+                if (!waiter.Predicate(diagnosticEvent))
+                {
+                    continue;
+                }
+
+                _waiters.RemoveAt(index);
+                waiter.Completion.TrySetResult(diagnosticEvent);
+            }
         }
     }
+
+    public Task<DesktopDiagnosticEvent> WaitForAsync(
+        Func<DesktopDiagnosticEvent, bool> predicate,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        lock (_gate)
+        {
+            var existing = _events.LastOrDefault(predicate);
+            if (existing is not null)
+            {
+                return Task.FromResult(existing);
+            }
+
+            var waiter = new DiagnosticWaiter(
+                predicate,
+                new TaskCompletionSource<DesktopDiagnosticEvent>(
+                    TaskCreationOptions.RunContinuationsAsynchronously));
+            _waiters.Add(waiter);
+            return WaitAndRemoveAsync(waiter, cancellationToken);
+        }
+    }
+
+    private async Task<DesktopDiagnosticEvent> WaitAndRemoveAsync(
+        DiagnosticWaiter waiter,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await waiter.Completion.Task.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _waiters.Remove(waiter);
+            }
+        }
+    }
+
+    private sealed record DiagnosticWaiter(
+        Func<DesktopDiagnosticEvent, bool> Predicate,
+        TaskCompletionSource<DesktopDiagnosticEvent> Completion);
 }
 
 internal sealed class CollectingEventPublisher : IEventPublisher
