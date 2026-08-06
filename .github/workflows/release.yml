@@ -144,7 +144,7 @@ jobs:
     if: needs.build.outputs.publish == 'true' && vars.AGENTBELL_ATTESTATIONS_ENABLED == 'true'
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write
       id-token: write
       attestations: write
       artifact-metadata: write
@@ -186,11 +186,30 @@ jobs:
       - name: Create draft, upload all assets, then publish as prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           TAG: v${{ needs.build.outputs.version }}
-        shell: bash
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" --draft --prerelease --verify-tag \
-            --title "AgentBell $TAG" --notes-file release-assets/RELEASE_NOTES.md
-          gh release upload "$TAG" release-assets/* --clobber
-          gh release edit "$TAG" --draft=false --prerelease
+
+          echo "Repository: $REPO"
+          echo "Tag: $TAG"
+          echo "Target commit: $TARGET_SHA"
+
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --target "$TARGET_SHA" \
+            --draft \
+            --prerelease \
+            --title "AgentBell $TAG" \
+            --notes-file release-assets/RELEASE_NOTES.md
+
+          gh release upload "$TAG" \
+            release-assets/* \
+            --repo "$REPO" \
+            --clobber
+
+          gh release edit "$TAG" \
+            --repo "$REPO" \
+            --draft=false \
+            --prerelease
