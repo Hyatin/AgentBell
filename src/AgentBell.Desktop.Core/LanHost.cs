@@ -3,8 +3,11 @@ using System.Net.Http.Headers;
 using AgentBell.Contracts;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -75,7 +78,7 @@ public static class LanHost
         }
 
         if (requirePrivateAddress && !LanPortRange.Contains(port)
-            || !requirePrivateAddress && port is < 1024 or > 65535)
+            || !requirePrivateAddress && port != 0 && port is < 1024 or > 65535)
         {
             throw new ArgumentOutOfRangeException(nameof(port));
         }
@@ -144,7 +147,7 @@ public static class LanHost
                     DeviceName = pairing.Configuration.DeviceName ?? "Windows PC",
                     DeviceId = pairing.Configuration.DeviceId ?? string.Empty,
                     LanAddress = address.ToString(),
-                    LanPort = port,
+                    LanPort = context.Connection.LocalPort,
                     LatestSequence = history.LatestSequence,
                     EventCount = history.EventCount,
                 },
@@ -387,7 +390,10 @@ public sealed class LanServerStarter
                         connectionManager,
                         diagnosticLogger);
                 await application.StartAsync(cancellationToken).ConfigureAwait(false);
-                if (!await pairing.UpdateLanPortAsync(port, cancellationToken).ConfigureAwait(false))
+                var selectedPort = ResolveSelectedPort(application, address, port);
+                if (!await pairing.UpdateLanPortAsync(
+                        selectedPort,
+                        cancellationToken).ConfigureAwait(false))
                 {
                     await application.StopAsync(cancellationToken).ConfigureAwait(false);
                     await application.DisposeAsync().ConfigureAwait(false);
@@ -395,8 +401,8 @@ public sealed class LanServerStarter
                 }
 
                 var pairingUrl = testIsolationEnabled
-                    ? PairingUrlBuilder.BuildForTesting(address, port, pairing)
-                    : PairingUrlBuilder.Build(address, port, pairing);
+                    ? PairingUrlBuilder.BuildForTesting(address, selectedPort, pairing)
+                    : PairingUrlBuilder.Build(address, selectedPort, pairing);
                 var qrWritten = await _qrCodeWriter.WriteAsync(
                     pairingUrl,
                     qrCodePath,
@@ -404,7 +410,7 @@ public sealed class LanServerStarter
                 return LanServerStartResult.Available(new LanServerInstance(
                     application,
                     address,
-                    port,
+                    selectedPort,
                     pairingUrl,
                     qrWritten));
             }
@@ -434,6 +440,37 @@ public sealed class LanServerStarter
         }
 
         return LanServerStartResult.Unavailable("lan_ports_unavailable");
+    }
+
+    private static int ResolveSelectedPort(
+        WebApplication application,
+        IPAddress expectedAddress,
+        int requestedPort)
+    {
+        if (requestedPort != 0)
+        {
+            return requestedPort;
+        }
+
+        var addresses = application.Services
+            .GetRequiredService<IServer>()
+            .Features
+            .Get<IServerAddressesFeature>()?
+            .Addresses;
+        if (addresses is null || addresses.Count != 1)
+        {
+            throw new InvalidOperationException("The isolated LAN listener address is unavailable.");
+        }
+
+        var listener = new Uri(addresses.Single());
+        if (!string.Equals(listener.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal)
+            || !string.Equals(listener.Host, expectedAddress.ToString(), StringComparison.Ordinal)
+            || listener.Port is < 1024 or > 65535)
+        {
+            throw new InvalidOperationException("The isolated LAN listener address is invalid.");
+        }
+
+        return listener.Port;
     }
 }
 

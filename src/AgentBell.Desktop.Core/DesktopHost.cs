@@ -158,8 +158,8 @@ public sealed record DesktopRuntimeOptions
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dataRoot);
         ValidateTestPort(loopbackPort, nameof(loopbackPort));
-        ValidateTestPort(lanPort, nameof(lanPort));
-        if (loopbackPort == lanPort)
+        ValidateTestPort(lanPort, nameof(lanPort), allowDynamic: true);
+        if (loopbackPort != 0 && loopbackPort == lanPort)
         {
             throw new ArgumentException("Isolated Hook and LAN ports must differ.");
         }
@@ -197,10 +197,15 @@ public sealed record DesktopRuntimeOptions
         }
 
         ValidateTestPort(LoopbackPort, nameof(LoopbackPort), allowDynamic: true);
-        ValidateTestPort(LanFirstPort, nameof(LanFirstPort));
-        ValidateTestPort(LanLastPort, nameof(LanLastPort));
+        ValidateTestPort(LanFirstPort, nameof(LanFirstPort), allowDynamic: true);
+        ValidateTestPort(LanLastPort, nameof(LanLastPort), allowDynamic: true);
+        var dynamicLanPort = LanFirstPort == 0 && LanLastPort == 0;
         if (LanFirstPort > LanLastPort
-            || LoopbackPort >= LanFirstPort && LoopbackPort <= LanLastPort
+            || (LanFirstPort == 0 || LanLastPort == 0) && !dynamicLanPort
+            || LoopbackPort != 0
+                && !dynamicLanPort
+                && LoopbackPort >= LanFirstPort
+                && LoopbackPort <= LanLastPort
             || LanAddressOverride is not null && !IPAddress.Loopback.Equals(LanAddressOverride))
         {
             throw new InvalidOperationException("Isolated listener settings are invalid.");

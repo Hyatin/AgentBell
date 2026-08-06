@@ -209,9 +209,7 @@ public sealed class AgentBellRuntime : IAsyncDisposable
             var configuration = await new PairingConfigurationManager(
                     new AgentBellConfigStore(_runtimeOptions.ConfigFilePath),
                     _tokenProtector,
-                    lanPortValidator: port =>
-                        port >= _runtimeOptions.LanFirstPort
-                        && port <= _runtimeOptions.LanLastPort)
+                    lanPortValidator: IsAllowedLanPort)
                 .LoadOrCreateAsync(cancellationToken)
                 .ConfigureAwait(false);
             _pairing = configuration.Session;
@@ -318,6 +316,19 @@ public sealed class AgentBellRuntime : IAsyncDisposable
         _lanStatus = RuntimeServiceStatus.Unavailable;
         _lanResultCode = resultCode;
         RecordStatus("lan-status", resultCode);
+    }
+
+    private bool IsAllowedLanPort(int port)
+    {
+        if (_runtimeOptions.TestIsolationEnabled
+            && _runtimeOptions.LanFirstPort == 0
+            && _runtimeOptions.LanLastPort == 0)
+        {
+            return port is >= 1024 and <= 65535;
+        }
+
+        return port >= _runtimeOptions.LanFirstPort
+            && port <= _runtimeOptions.LanLastPort;
     }
 
     private void RecordStatus(string eventType, string resultCode)

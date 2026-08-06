@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.WebSockets;
 using System.Net.Sockets;
@@ -8,11 +9,22 @@ using AgentBell.Contracts;
 using AgentBell.Desktop;
 using AgentBell.Hook;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace AgentBell.Integration.Tests;
 
 public sealed class HookCommandExecutionTests
 {
+    private static readonly TimeSpan ServiceStartupTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan ReadinessRequestTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ReadinessPollInterval = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan EventCompletionTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan TestHookForwardTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan TestHookConnectTimeout = TimeSpan.FromSeconds(2);
+
     [Fact]
     public async Task CommandWindows_SpacesAndChinese_OfflinePreservesContractAndFailsFast()
     {
@@ -216,30 +228,61 @@ public sealed class HookCommandExecutionTests
     {
         using var productionDirectory = CreateEmptyDirectory("production");
         using var automationDirectory = CreateRunnableHookDirectory();
-        var productionLoopbackPort = GetIsolatedPort();
-        var productionLanPort = GetIsolatedPort(productionLoopbackPort);
-        var automationPort = GetIsolatedPort(productionLoopbackPort, productionLanPort);
-        var productionOptions = DesktopRuntimeOptions.CreateIsolatedTest(
-            productionDirectory.Path,
-            productionLoopbackPort,
-            productionLanPort);
+        var productionOptions = new DesktopRuntimeOptions
+        {
+            TestIsolationEnabled = true,
+            DataDirectoryPath = productionDirectory.Path,
+            EventsFilePath = Path.Combine(productionDirectory.Path, "events.json"),
+            ConfigFilePath = Path.Combine(productionDirectory.Path, "config.json"),
+            PairingQrCodePath = Path.Combine(productionDirectory.Path, "pairing", "pairing.png"),
+            DiagnosticLogPath = Path.Combine(productionDirectory.Path, "logs", "desktop.ndjson"),
+            LoopbackPort = 0,
+            LanFirstPort = 0,
+            LanLastPort = 0,
+            LanAddressOverride = IPAddress.Loopback,
+        };
+        var productionDiagnostics = new SignalingDesktopDiagnosticLogger();
         await using var productionRuntime = new AgentBellRuntime(
             productionOptions,
+            diagnosticLogger: productionDiagnostics,
             tokenProtector: new ReversibleTestTokenProtector());
-        await productionRuntime.StartAsync(CancellationToken.None);
+        using (var startup = new CancellationTokenSource(ServiceStartupTimeout))
+        {
+            await productionRuntime.StartAsync(startup.Token);
+        }
+
+        var productionReady = await productionRuntime.GetSnapshotAsync(CancellationToken.None);
+        Assert.Equal(RuntimeServiceStatus.Running, productionReady.LocalHookService);
+        Assert.Equal(RuntimeServiceStatus.Available, productionReady.LanService);
+        var selectedProductionLanPort = Assert.IsType<int>(productionReady.LanPort);
+        Assert.InRange(selectedProductionLanPort, 1024, 65535);
 
         using var productionClient = new ClientWebSocket();
         var pairingUrl = Assert.IsType<string>(productionRuntime.GetPairingUrl());
         var token = pairingUrl.Split("#token=", StringSplitOptions.None)[1]
             .Split('&', 2)[0];
-        await productionClient.ConnectAsync(
-            new Uri(
-                $"ws://127.0.0.1:{productionLanPort}{AgentBellProtocol.WebSocketPath}"
-                + $"?access_token={token}"),
-            CancellationToken.None);
-        using var hello = JsonDocument.Parse(await ReceiveTextAsync(productionClient));
-        Assert.Equal("hello", hello.RootElement.GetProperty("type").GetString());
-        await SendTextAsync(productionClient, "{\"type\":\"resume\",\"lastSequence\":0}");
+        var webSocketMessageTypes = new List<string>();
+        using (var webSocketReady = new CancellationTokenSource(ServiceStartupTimeout))
+        {
+            await productionClient.ConnectAsync(
+                new Uri(
+                    $"ws://127.0.0.1:{selectedProductionLanPort}{AgentBellProtocol.WebSocketPath}"
+                    + $"?access_token={token}"),
+                webSocketReady.Token);
+            using var hello = JsonDocument.Parse(
+                await ReceiveTextAsync(productionClient, webSocketReady.Token));
+            var helloType = hello.RootElement.GetProperty("type").GetString();
+            Assert.Equal("hello", helloType);
+            webSocketMessageTypes.Add(helloType!);
+            await SendTextAsync(
+                productionClient,
+                "{\"type\":\"resume\",\"lastSequence\":0}",
+                webSocketReady.Token);
+            await productionDiagnostics.WaitForResumeAsync(webSocketReady.Token);
+        }
+
+        var connectedSnapshot = await productionRuntime.GetSnapshotAsync(CancellationToken.None);
+        Assert.Equal(1, connectedSnapshot.WebSocketClientCount);
 
         var productionBefore = await productionRuntime.GetSnapshotAsync(CancellationToken.None);
         var productionEventsBefore = File.Exists(productionOptions.EventsFilePath)
@@ -252,25 +295,90 @@ public sealed class HookCommandExecutionTests
             DataDirectoryPath = Path.Combine(automationDirectory.Path, "data-home"),
             EventsFilePath = Path.Combine(automationDirectory.Path, "data-home", "events.json"),
             DiagnosticLogPath = Path.Combine(automationDirectory.Path, "data-home", "logs", "desktop.ndjson"),
-            LoopbackPort = automationPort,
+            LoopbackPort = 0,
         };
-        await using var automationHost = DesktopHost.Build(automationOptions);
+        var eventPublisher = new SignalingEventPublisher();
+        await using var automationHost = DesktopHost.Build(automationOptions, eventPublisher);
         await DesktopHost.InitializeAsync(automationHost, CancellationToken.None);
-        await automationHost.StartAsync();
+        using (var startup = new CancellationTokenSource(ServiceStartupTimeout))
+        {
+            await automationHost.StartAsync(startup.Token);
+        }
+
+        var automationEndpoint = GetListenerEndpoint(automationHost);
+        var automationPort = automationEndpoint.Port;
+        var automationLifetime = automationHost.Services.GetRequiredService<IHostApplicationLifetime>();
+        var automationReadyAt = await WaitUntilIngestionReadyAsync(
+            automationEndpoint,
+            automationLifetime,
+            ServiceStartupTimeout);
+        ProcessResult? result = null;
+        HookDiagnosticSnapshot? hookDiagnostic = null;
         try
         {
             var hookPath = Path.Combine(automationDirectory.Path, "AgentBell.Hook.exe");
-            var result = await RunAsync(
+            var hookDiagnosticPath = Path.Combine(automationDirectory.Path, "hook.ndjson");
+            result = await RunAsync(
                 hookPath,
                 UniqueStopJson(),
                 automationDirectory.Path,
-                automationPort);
-            Assert.Equal(0, result.ExitCode);
-            Assert.Equal(HookApplication.StopHookContinueResponse, result.StandardOutput);
+                automationPort,
+                hookDiagnosticPath,
+                TestHookForwardTimeout,
+                TestHookConnectTimeout);
+            hookDiagnostic = ReadHookDiagnostic(hookDiagnosticPath);
+            Assert.True(
+                result.ExitCode == 0
+                && string.Equals(
+                    result.StandardOutput,
+                    HookApplication.StopHookContinueResponse,
+                    StringComparison.Ordinal)
+                && string.IsNullOrEmpty(result.StandardError)
+                && string.Equals(
+                    hookDiagnostic.Result,
+                    ForwardResult.SuccessCode,
+                    StringComparison.Ordinal)
+                && hookDiagnostic.HttpStatusCode == (int)HttpStatusCode.Accepted,
+                CreateAutomationFailureDiagnostic(
+                    "hook_process",
+                    automationEndpoint,
+                    automationReadyAt,
+                    automationLifetime,
+                    productionClient,
+                    productionBefore,
+                    result,
+                    hookDiagnostic,
+                    eventPublisher.Events,
+                    webSocketMessageTypes,
+                    productionDiagnostics.Events));
+
+            AgentEvent acceptedEvent;
+            try
+            {
+                acceptedEvent = await eventPublisher.Event.WaitAsync(EventCompletionTimeout);
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    CreateAutomationFailureDiagnostic(
+                        "event_completion",
+                        automationEndpoint,
+                        automationReadyAt,
+                        automationLifetime,
+                        productionClient,
+                        productionBefore,
+                        result,
+                        hookDiagnostic,
+                        eventPublisher.Events,
+                        webSocketMessageTypes,
+                        productionDiagnostics.Events),
+                    exception);
+            }
 
             var automationEvents = await new JsonEventStore(automationOptions.EventsFilePath)
                 .LoadAsync(CancellationToken.None);
-            Assert.Single(automationEvents.Events);
+            var persistedEvent = Assert.Single(automationEvents.Events);
+            Assert.Equal(acceptedEvent.EventId, persistedEvent.EventId);
 
             var productionAfter = await productionRuntime.GetSnapshotAsync(CancellationToken.None);
             Assert.Equal(productionBefore.EventCount, productionAfter.EventCount);
@@ -286,7 +394,15 @@ public sealed class HookCommandExecutionTests
         }
         finally
         {
-            await automationHost.StopAsync();
+            try
+            {
+                using var shutdown = new CancellationTokenSource(ServiceStartupTimeout);
+                await automationHost.StopAsync(shutdown.Token);
+            }
+            finally
+            {
+                await CloseWebSocketAsync(productionClient);
+            }
         }
     }
 
@@ -295,7 +411,9 @@ public sealed class HookCommandExecutionTests
         string stdin,
         string isolationRoot,
         int isolatedPort,
-        string? diagnosticPath = null)
+        string? diagnosticPath = null,
+        TimeSpan? forwardTimeout = null,
+        TimeSpan? connectTimeout = null)
     {
         Assert.True(File.Exists(hookPath));
         Assert.True(Directory.Exists(isolationRoot));
@@ -315,6 +433,8 @@ public sealed class HookCommandExecutionTests
         startInfo.ArgumentList.Add(HookInputResolver.CodexStopHookOption);
         startInfo.Environment.Remove(DiagnosticLoggerFactory.EnabledEnvironmentVariable);
         startInfo.Environment.Remove(DiagnosticLoggerFactory.PathEnvironmentVariable);
+        startInfo.Environment.Remove(HookEndpointResolver.TestForwardTimeoutEnvironmentVariable);
+        startInfo.Environment.Remove(HookEndpointResolver.TestConnectTimeoutEnvironmentVariable);
         startInfo.Environment[HookEndpointResolver.TestModeEnvironmentVariable] = "1";
         startInfo.Environment[HookEndpointResolver.TestLoopbackPortEnvironmentVariable] =
             isolatedPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -328,6 +448,18 @@ public sealed class HookCommandExecutionTests
         {
             startInfo.Environment[DiagnosticLoggerFactory.EnabledEnvironmentVariable] = "1";
             startInfo.Environment[DiagnosticLoggerFactory.PathEnvironmentVariable] = diagnosticPath;
+        }
+        if (forwardTimeout is not null)
+        {
+            startInfo.Environment[HookEndpointResolver.TestForwardTimeoutEnvironmentVariable] =
+                checked((int)forwardTimeout.Value.TotalMilliseconds)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        if (connectTimeout is not null)
+        {
+            startInfo.Environment[HookEndpointResolver.TestConnectTimeoutEnvironmentVariable] =
+                checked((int)connectTimeout.Value.TotalMilliseconds)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
         using var process = new Process { StartInfo = startInfo };
         var stopwatch = Stopwatch.StartNew();
@@ -408,10 +540,13 @@ public sealed class HookCommandExecutionTests
         }
     }
 
-    private static async Task SendTextAsync(ClientWebSocket socket, string text)
+    private static async Task SendTextAsync(
+        ClientWebSocket socket,
+        string text,
+        CancellationToken cancellationToken = default)
     {
         var bytes = Encoding.UTF8.GetBytes(text);
-        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, cancellationToken);
     }
 
     private static async Task<string> ReceiveTextAsync(
@@ -436,6 +571,201 @@ public sealed class HookCommandExecutionTests
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
+    private static Uri GetListenerEndpoint(WebApplication application)
+    {
+        var addresses = application.Services
+            .GetRequiredService<IServer>()
+            .Features
+            .Get<IServerAddressesFeature>()?
+            .Addresses;
+        var address = Assert.Single(addresses ?? []);
+        var listener = new Uri(address);
+        Assert.Equal(Uri.UriSchemeHttp, listener.Scheme);
+        Assert.Equal(IPAddress.Loopback.ToString(), listener.Host);
+        Assert.InRange(listener.Port, 1, 65535);
+        return new Uri(listener, DesktopHttpContract.EventsPath);
+    }
+
+    private static async Task<DateTimeOffset> WaitUntilIngestionReadyAsync(
+        Uri endpoint,
+        IHostApplicationLifetime lifetime,
+        TimeSpan timeout)
+    {
+        using var handler = new SocketsHttpHandler { UseProxy = false };
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        using var overall = new CancellationTokenSource(timeout);
+        var stopwatch = Stopwatch.StartNew();
+        var lastResult = "not_attempted";
+        while (!overall.IsCancellationRequested)
+        {
+            if (lifetime.ApplicationStopped.IsCancellationRequested)
+            {
+                throw new InvalidOperationException(
+                    $"Automation listener exited before readiness. TargetHost={endpoint.Host}; "
+                    + $"TargetPort={endpoint.Port}; EndpointPath={endpoint.AbsolutePath}; "
+                    + $"WaitedMs={stopwatch.Elapsed.TotalMilliseconds:F0}.");
+            }
+
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(overall.Token);
+            attempt.CancelAfter(ReadinessRequestTimeout);
+            try
+            {
+                using var content = new StringContent(
+                    "{\"hook_event_name\":\"ReadinessProbe\"}",
+                    Encoding.UTF8,
+                    "application/json");
+                using var response = await client.PostAsync(endpoint, content, attempt.Token);
+                lastResult = $"http_{(int)response.StatusCode}";
+                if (response.StatusCode == HttpStatusCode.NoContent)
+                {
+                    return DateTimeOffset.UtcNow;
+                }
+            }
+            catch (OperationCanceledException) when (!overall.IsCancellationRequested)
+            {
+                lastResult = "request_timeout";
+            }
+            catch (HttpRequestException)
+            {
+                lastResult = "request_unavailable";
+            }
+
+            try
+            {
+                await Task.Delay(ReadinessPollInterval, overall.Token);
+            }
+            catch (OperationCanceledException) when (overall.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        throw new TimeoutException(
+            $"Automation ingestion readiness timed out. TargetHost={endpoint.Host}; "
+            + $"TargetPort={endpoint.Port}; EndpointPath={endpoint.AbsolutePath}; "
+            + $"WaitedMs={stopwatch.Elapsed.TotalMilliseconds:F0}; "
+            + $"HostState={GetHostState(lifetime)}; LastResult={lastResult}.");
+    }
+
+    private static HookDiagnosticSnapshot ReadHookDiagnostic(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return new HookDiagnosticSnapshot("missing", null, 0);
+        }
+
+        var lines = File.ReadAllLines(path);
+        if (lines.Length != 1)
+        {
+            return new HookDiagnosticSnapshot($"line_count_{lines.Length}", null, 0);
+        }
+
+        using var document = JsonDocument.Parse(lines[0]);
+        var root = document.RootElement;
+        return new HookDiagnosticSnapshot(
+            root.TryGetProperty("result", out var result)
+                ? result.GetString() ?? "missing"
+                : "missing",
+            root.TryGetProperty("httpStatus", out var status)
+                && status.ValueKind == JsonValueKind.Number
+                    ? status.GetInt32()
+                    : null,
+            root.TryGetProperty("elapsedMs", out var elapsed)
+                && elapsed.ValueKind == JsonValueKind.Number
+                    ? elapsed.GetInt64()
+                    : 0);
+    }
+
+    private static string CreateAutomationFailureDiagnostic(
+        string stage,
+        Uri endpoint,
+        DateTimeOffset readyAt,
+        IHostApplicationLifetime automationLifetime,
+        ClientWebSocket productionClient,
+        AgentBellRuntimeSnapshot productionSnapshot,
+        ProcessResult? process,
+        HookDiagnosticSnapshot? hookDiagnostic,
+        IReadOnlyList<AgentEvent> acceptedEvents,
+        IReadOnlyList<string> clientMessageTypes,
+        IReadOnlyList<DesktopDiagnosticEvent> runtimeDiagnostics)
+    {
+        var acceptedTypes = acceptedEvents
+            .Select(item => $"{item.Agent}/{item.Status}")
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var runtimeMessageTypes = runtimeDiagnostics
+            .Where(item => !string.IsNullOrWhiteSpace(item.MessageType))
+            .Select(item => item.MessageType!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return $"Automation isolation failure. Stage={stage}; ServiceReady=true; "
+            + $"ReadyAt={readyAt:O}; HostState={GetHostState(automationLifetime)}; "
+            + $"TargetHost={endpoint.Host}; TargetPort={endpoint.Port}; "
+            + $"EndpointPath={endpoint.AbsolutePath}; Protocol={endpoint.Scheme}; "
+            + $"WebSocketState={productionClient.State}; "
+            + $"ProductionLocalState={productionSnapshot.LocalHookService}; "
+            + $"ProductionLanState={productionSnapshot.LanService}; "
+            + $"ProductionRuntimeExited={productionSnapshot.LocalHookService != RuntimeServiceStatus.Running}; "
+            + $"HookExitCode={process?.ExitCode.ToString() ?? "not_started"}; "
+            + $"HookElapsedMs={process?.Elapsed.TotalMilliseconds.ToString("F0") ?? "none"}; "
+            + $"HookStdout={SanitizeProcessText(process?.StandardOutput)}; "
+            + $"HookStderr={SanitizeProcessText(process?.StandardError)}; "
+            + $"ForwardResult={hookDiagnostic?.Result ?? "missing"}; "
+            + $"ForwardHttpStatus={hookDiagnostic?.HttpStatusCode?.ToString() ?? "none"}; "
+            + $"ForwardElapsedMs={hookDiagnostic?.ElapsedMilliseconds.ToString() ?? "none"}; "
+            + $"AcceptedMessageCount={acceptedEvents.Count}; "
+            + $"AcceptedMessageTypes={string.Join(',', acceptedTypes)}; "
+            + $"ClientMessageTypes={string.Join(',', clientMessageTypes)}; "
+            + $"RuntimeMessageTypes={string.Join(',', runtimeMessageTypes)}.";
+    }
+
+    private static string GetHostState(IHostApplicationLifetime lifetime)
+    {
+        if (lifetime.ApplicationStopped.IsCancellationRequested)
+        {
+            return "stopped";
+        }
+
+        if (lifetime.ApplicationStopping.IsCancellationRequested)
+        {
+            return "stopping";
+        }
+
+        return lifetime.ApplicationStarted.IsCancellationRequested ? "running" : "starting";
+    }
+
+    private static string SanitizeProcessText(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "<empty>";
+        }
+
+        var singleLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return singleLine.Length <= 256 ? singleLine : singleLine[..256];
+    }
+
+    private static async Task CloseWebSocketAsync(ClientWebSocket socket)
+    {
+        if (socket.State is not (WebSocketState.Open or WebSocketState.CloseReceived))
+        {
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            await socket.CloseOutputAsync(
+                WebSocketCloseStatus.NormalClosure,
+                "test-complete",
+                timeout.Token);
+        }
+        catch
+        {
+            socket.Abort();
+        }
+    }
+
     private static RunnableDirectory CreateEmptyDirectory(string label)
     {
         var destination = Path.Combine(
@@ -450,6 +780,52 @@ public sealed class HookCommandExecutionTests
         string StandardOutput,
         string StandardError,
         TimeSpan Elapsed);
+
+    private sealed record HookDiagnosticSnapshot(
+        string Result,
+        int? HttpStatusCode,
+        long ElapsedMilliseconds);
+
+    private sealed class SignalingEventPublisher : IEventPublisher
+    {
+        private readonly ConcurrentQueue<AgentEvent> _events = new();
+        private readonly TaskCompletionSource<AgentEvent> _event = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<AgentEvent> Event => _event.Task;
+
+        public IReadOnlyList<AgentEvent> Events => _events.ToArray();
+
+        public ValueTask PublishAsync(AgentEvent agentEvent, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _events.Enqueue(agentEvent);
+            _event.TrySetResult(agentEvent);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class SignalingDesktopDiagnosticLogger : IDesktopDiagnosticLogger
+    {
+        private readonly ConcurrentQueue<DesktopDiagnosticEvent> _events = new();
+        private readonly TaskCompletionSource _resume = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<DesktopDiagnosticEvent> Events => _events.ToArray();
+
+        public void Record(DesktopDiagnosticEvent diagnosticEvent)
+        {
+            _events.Enqueue(diagnosticEvent);
+            if (string.Equals(diagnosticEvent.MessageType, "resume", StringComparison.Ordinal)
+                && string.Equals(diagnosticEvent.Result, "success", StringComparison.Ordinal))
+            {
+                _resume.TrySetResult();
+            }
+        }
+
+        public Task WaitForResumeAsync(CancellationToken cancellationToken) =>
+            _resume.Task.WaitAsync(cancellationToken);
+    }
 
     private sealed class ReversibleTestTokenProtector : IPairingTokenProtector
     {
