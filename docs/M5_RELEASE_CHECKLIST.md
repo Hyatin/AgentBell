@@ -1,4 +1,4 @@
-# M5 `v0.5.0-beta.1` public beta release checklist
+# M5 `v0.6.0-beta.1` public beta release checklist
 
 This checklist is manual. Completing it does not authorize scripts or Codex to push, tag, create a repository, publish a Release, upload assets, or change GitHub settings.
 
@@ -51,7 +51,8 @@ For optional trusted Windows signing, set the external PFX path/password and a t
 
 ```powershell
 .\scripts\audit-public-release.ps1
-.\scripts\build-release.ps1 -Version 0.5.0-beta.1 -Clean -DryRun
+.\scripts\audit-localization.ps1
+.\scripts\build-release.ps1 -Version 0.6.0-beta.1 -Clean -DryRun
 ```
 
 Remove secret variables from the release shell after use. A non-dry-run local build still does not push, tag, upload, or create a GitHub Release.

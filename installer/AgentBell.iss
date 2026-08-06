@@ -59,11 +59,38 @@ LicenseFile={#LicenseFile}
 #endif
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "zhcn"; MessagesFile: "Languages\ChineseSimplified.isl"
+
+[CustomMessages]
+en.TaskStartup=Start AgentBell after signing in to Windows
+zhcn.TaskStartup=登录 Windows 后启动 AgentBell
+en.TaskStartupGroup=Startup options:
+zhcn.TaskStartupGroup=启动选项：
+en.TaskDesktopShortcut=Create a desktop shortcut
+zhcn.TaskDesktopShortcut=创建桌面快捷方式
+en.TaskShortcutGroup=Shortcuts:
+zhcn.TaskShortcutGroup=快捷方式：
+en.AndroidApkFolder=Android APK folder
+zhcn.AndroidApkFolder=Android APK 文件夹
+en.LaunchAgentBell=Launch AgentBell
+zhcn.LaunchAgentBell=启动 AgentBell
+en.CodexIntegrationFailed=Codex integration failed. Stage: %1; exit code: %2.%nThe setup log contains the resolved CODEX_HOME and hooks.json paths and sanitized child-process diagnostics.
+zhcn.CodexIntegrationFailed=Codex 集成失败。阶段：%1；退出码：%2。%n安装日志包含已解析的 CODEX_HOME、hooks.json 路径和脱敏子进程诊断。
+en.CodexTrustReview=Codex will request review of the new stable Hook path. Confirm that the path belongs to AgentBell before trusting it.%nAgentBell does not bypass or confirm Codex Hook trust prompts automatically.
+zhcn.CodexTrustReview=Codex 将要求审核新的稳定 Hook 路径。请确认路径属于 AgentBell 后选择信任。%nAgentBell 不会自动绕过或确认 Codex Hook 信任提示。
+en.UninstallInitializeFailed=AgentBell uninstall initialization failed. Review the initialize stage in the uninstall log.
+zhcn.UninstallInitializeFailed=AgentBell 卸载初始化失败。请查看卸载日志中的 initialize 阶段。
+en.DeleteUserData=Also delete AgentBell settings, pairing information, and event history
+zhcn.DeleteUserData=同时删除 AgentBell 设置、配对信息和事件历史
+en.UninstallCodexCleanupFailed=AgentBell could not safely remove the Codex Hook. Stage: %1; exit code: %2.%nhooks.json and all backups were preserved. Program file removal will continue.
+zhcn.UninstallCodexCleanupFailed=AgentBell 未能安全移除 Codex Hook。阶段：%1；退出码：%2。%nhooks.json 和所有备份均已保留，程序文件卸载将继续。
+en.UninstallCriticalFailed=AgentBell encountered a critical uninstall error before program file removal began. Review the uninstall log.
+zhcn.UninstallCriticalFailed=AgentBell 卸载在删除程序文件前遇到关键错误。请查看卸载日志。
 
 [Tasks]
-Name: "startup"; Description: "登录 Windows 后启动 AgentBell"; GroupDescription: "启动选项:"; Flags: checkedonce
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式:"; Flags: unchecked
+Name: "startup"; Description: "{cm:TaskStartup}"; GroupDescription: "{cm:TaskStartupGroup}"; Flags: checkedonce
+Name: "desktopicon"; Description: "{cm:TaskDesktopShortcut}"; GroupDescription: "{cm:TaskShortcutGroup}"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\AgentBell.Tray.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -73,11 +100,11 @@ Source: "{#SourceDir}\android\{#AndroidApkFileName}"; DestDir: "{app}\android"; 
 
 [Icons]
 Name: "{group}\AgentBell"; Filename: "{app}\{#TrayExe}"
-Name: "{group}\Android APK 文件夹"; Filename: "{sys}\explorer.exe"; Parameters: """{app}\android"""
+Name: "{group}\{cm:AndroidApkFolder}"; Filename: "{sys}\explorer.exe"; Parameters: """{app}\android"""
 Name: "{autodesktop}\AgentBell"; Filename: "{app}\{#TrayExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#TrayExe}"; Description: "启动 AgentBell"; Flags: nowait postinstall skipifsilent; Check: CodexIntegrationSucceeded
+Filename: "{app}\{#TrayExe}"; Description: "{cm:LaunchAgentBell}"; Flags: nowait postinstall skipifsilent; Check: CodexIntegrationSucceeded
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\AgentBell"; Check: ShouldDeleteUserData
@@ -301,9 +328,8 @@ begin
         IntegrationFailureStage + ' with exit code ' +
         IntToStr(IntegrationFailureExitCode) + '.');
       SuppressibleMsgBox(
-        'Codex 集成失败。阶段：' + IntegrationFailureStage +
-        '；退出码：' + IntToStr(IntegrationFailureExitCode) + '。' + #13#10 +
-        '安装日志包含已解析的 CODEX_HOME、hooks.json 路径和脱敏子进程诊断。',
+        FmtMessage(
+          CustomMessage('CodexIntegrationFailed'), [IntegrationFailureStage, IntToStr(IntegrationFailureExitCode)]),
         mbError, MB_OK, IDOK);
     end
     else
@@ -313,8 +339,7 @@ begin
 
     if CodexIntegrationSucceeded() and (not WizardSilent) then
       MsgBox(
-        'Codex 将要求审核新的稳定 Hook 路径。请确认路径属于 AgentBell 后选择信任。' + #13#10 +
-        'AgentBell 不会自动绕过或点击 Codex 的 Hook 信任确认。',
+        CustomMessage('CodexTrustReview'),
         mbInformation, MB_OK);
   end;
 end;
@@ -361,7 +386,7 @@ begin
     Log('AgentBell uninstall exception type: PascalScriptException');
     Log('AgentBell uninstall initialize exception: ' + GetExceptionMessage());
     SuppressibleMsgBox(
-      'AgentBell 卸载初始化失败。请查看卸载日志中的 initialize 阶段。',
+      CustomMessage('UninstallInitializeFailed'),
       mbError, MB_OK, IDOK);
     Abort;
   end;
@@ -382,7 +407,7 @@ begin
     DeleteDataCheckBox.Left := ScaleX(24);
     DeleteDataCheckBox.Top := UninstallProgressForm.StatusLabel.Top + ScaleY(56);
     DeleteDataCheckBox.Width := UninstallProgressForm.ClientWidth - ScaleX(48);
-    DeleteDataCheckBox.Caption := '同时删除 AgentBell 配置、配对和事件历史';
+    DeleteDataCheckBox.Caption := CustomMessage('DeleteUserData');
     DeleteDataCheckBox.Checked :=
       CompareText(ExpandConstant('{param:DELETEUSERDATA|0}'), '1') = 0;
     Log('AgentBell uninstall data checkbox: initialized.');
@@ -410,9 +435,8 @@ begin
   Log('AgentBell uninstall failed stage: ' + StageName);
   Log('AgentBell uninstall child exit code: ' + IntToStr(ResultCode));
   SuppressibleMsgBox(
-    'AgentBell 未能安全移除 Codex Hook。阶段：' + StageName +
-    '；退出码：' + IntToStr(ResultCode) + '。' + #13#10 +
-    'hooks.json 与备份均已保留，程序文件卸载将继续。',
+    FmtMessage(
+      CustomMessage('UninstallCodexCleanupFailed'), [StageName, IntToStr(ResultCode)]),
     mbError, MB_OK, IDOK);
 end;
 
@@ -477,7 +501,7 @@ begin
       Log('AgentBell uninstall exception type: PascalScriptException');
       Log('AgentBell uninstall critical exception: ' + GetExceptionMessage());
       SuppressibleMsgBox(
-        'AgentBell 卸载遇到关键错误，尚未开始删除程序文件。请查看卸载日志。',
+        CustomMessage('UninstallCriticalFailed'),
         mbError, MB_OK, IDOK);
       Abort;
     end;

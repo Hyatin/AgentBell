@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
+using AgentBell.Localization;
 
 namespace AgentBell.Desktop;
 
@@ -26,6 +27,10 @@ public sealed record AgentBellConfiguration
     /// <summary>Gets the most recently selected LAN port.</summary>
     [JsonPropertyName("lastLanPort")]
     public int? LastLanPort { get; init; }
+
+    /// <summary>Gets the independently persisted Windows UI language.</summary>
+    [JsonPropertyName("language")]
+    public string Language { get; init; } = AppLanguageValues.System;
 
     /// <summary>Gets when the configuration was first created.</summary>
     [JsonPropertyName("createdAt")]
@@ -90,6 +95,7 @@ public sealed class PairingConfigurationManager
             var lastLanPort = existing?.LastLanPort is int port && _lanPortValidator(port)
                 ? (int?)port
                 : null;
+            var language = AppLanguageValues.Normalize(existing?.Language);
             var needsSave = existing is null
                 || load.CorruptFileRecovered
                 || tokenWasRegenerated
@@ -97,6 +103,7 @@ public sealed class PairingConfigurationManager
                 || !string.Equals(existing.DeviceId, deviceId, StringComparison.Ordinal)
                 || !string.Equals(existing.DeviceName, deviceName, StringComparison.Ordinal)
                 || existing.LastLanPort != lastLanPort
+                || !string.Equals(existing.Language, language, StringComparison.Ordinal)
                 || existing.UpdatedAt <= DateTimeOffset.MinValue;
 
             var protectedToken = existing?.EncryptedPairingToken;
@@ -113,6 +120,7 @@ public sealed class PairingConfigurationManager
                 DeviceName = deviceName,
                 EncryptedPairingToken = protectedToken,
                 LastLanPort = lastLanPort,
+                Language = language,
                 CreatedAt = createdAt,
                 UpdatedAt = needsSave ? now : existing!.UpdatedAt,
             };
@@ -273,6 +281,31 @@ public sealed class PairingConfigurationSession : IDisposable
         var updated = Configuration with
         {
             LastLanPort = port,
+            UpdatedAt = _timeProvider.GetUtcNow(),
+        };
+        if (!await _store.SaveAsync(updated, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        Configuration = updated;
+        return true;
+    }
+
+    /// <summary>Persists a supported Windows UI language without changing pairing state.</summary>
+    public async Task<bool> UpdateLanguageAsync(
+        AppLanguage language,
+        CancellationToken cancellationToken)
+    {
+        var persistedValue = AppLanguageValues.ToPersistedValue(language);
+        if (string.Equals(Configuration.Language, persistedValue, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var updated = Configuration with
+        {
+            Language = persistedValue,
             UpdatedAt = _timeProvider.GetUtcNow(),
         };
         if (!await _store.SaveAsync(updated, cancellationToken).ConfigureAwait(false))

@@ -2,6 +2,23 @@
 
 All notable changes follow Keep a Changelog conventions. This project uses semantic versions with prerelease suffixes.
 
+## [0.6.0-beta.1] - Unreleased
+
+### Added
+
+- English and Simplified Chinese resources for the Windows Tray, pairing page, Android UI, foreground/completion notifications, Setup, and uninstaller.
+- Independent Follow system, English, and Simplified Chinese application language settings.
+- Resource parity, placeholder, fallback, persistence, and hardcoded-user-interface auditing.
+
+### Changed
+
+- Default public repository documentation is now English with a matching Simplified Chinese README.
+- Windows language is stored in the existing atomic local configuration; Android uses official per-app locales.
+
+### Compatibility
+
+- Protocol version 1, API/WebSocket contracts, Hook arguments, pairing, and Codex configuration behavior are unchanged.
+
 ## [0.5.0-beta.1] - 2026-08-03
 
 ### Added

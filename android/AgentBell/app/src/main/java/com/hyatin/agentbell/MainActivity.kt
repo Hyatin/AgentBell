@@ -5,11 +5,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +29,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -42,15 +43,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hyatin.agentbell.connection.ConnectionState
+import com.hyatin.agentbell.localization.AppLanguage
+import com.hyatin.agentbell.localization.AppLanguageController
 import com.hyatin.agentbell.notification.AgentBellNotificationManager
 import com.hyatin.agentbell.pairing.QrScannerController
 import com.hyatin.agentbell.protocol.AgentEvent
@@ -58,8 +64,9 @@ import com.hyatin.agentbell.ui.MainScreen
 import com.hyatin.agentbell.ui.MainUiProjection
 import com.hyatin.agentbell.ui.MainViewModel
 import com.hyatin.agentbell.ui.PairedComputer
+import com.hyatin.agentbell.ui.UiText
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
     private val viewModel by viewModels<MainViewModel>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -97,8 +104,21 @@ private fun AgentBellApp(viewModel: MainViewModel) {
                 .padding(padding)
                 .padding(20.dp),
         ) {
-            Text("AgentBell", style = MaterialTheme.typography.headlineMedium)
-            Text("版本 ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("AgentBell", style = MaterialTheme.typography.headlineMedium)
+                    Text(
+                        stringResource(R.string.version_format, BuildConfig.VERSION_NAME),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                TextButton(onClick = viewModel::openSettings) {
+                    Text(stringResource(R.string.common_settings))
+                }
+            }
             Spacer(Modifier.height(16.dp))
             when (val current = screen) {
                 MainScreen.Loading -> CircularProgressIndicator()
@@ -113,6 +133,7 @@ private fun AgentBellApp(viewModel: MainViewModel) {
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 is MainScreen.EventDetails -> EventDetailsScreen(current.event, viewModel)
+                MainScreen.Settings -> SettingsScreen(viewModel)
             }
         }
     }
@@ -121,20 +142,31 @@ private fun AgentBellApp(viewModel: MainViewModel) {
 @Composable
 private fun UnpairedScreen(screen: MainScreen.Unpaired, viewModel: MainViewModel) {
     var manualUrl by remember { mutableStateOf("") }
-    Text("扫描电脑上的配对二维码")
-    Text("同一局域网直连，不经过云端。", style = MaterialTheme.typography.bodySmall)
+    Text(stringResource(R.string.pairing_scan_computer_qr))
+    Text(
+        stringResource(R.string.pairing_local_network_notice),
+        style = MaterialTheme.typography.bodySmall,
+    )
     screen.errorCode?.let {
         Spacer(Modifier.height(8.dp))
-        Text("配对失败：$it", color = MaterialTheme.colorScheme.error)
+        Text(
+            localized(MainUiProjection.pairingErrorText(it)),
+            color = MaterialTheme.colorScheme.error,
+        )
     }
     Spacer(Modifier.height(16.dp))
-    Button(onClick = viewModel::beginScan) { Text("扫码配对") }
+    Button(onClick = viewModel::beginScan) {
+        Text(stringResource(R.string.pairing_scan_qr_code))
+    }
     Spacer(Modifier.height(20.dp))
-    Text("诊断备用：手动粘贴配对URL", style = MaterialTheme.typography.labelMedium)
+    Text(
+        stringResource(R.string.pairing_manual_diagnostic),
+        style = MaterialTheme.typography.labelMedium,
+    )
     OutlinedTextField(
         value = manualUrl,
         onValueChange = { manualUrl = it.take(2048) },
-        label = { Text("配对URL") },
+        label = { Text(stringResource(R.string.pairing_url)) },
         singleLine = true,
         visualTransformation = PasswordVisualTransformation(),
         modifier = Modifier.fillMaxWidth(),
@@ -142,7 +174,9 @@ private fun UnpairedScreen(screen: MainScreen.Unpaired, viewModel: MainViewModel
     TextButton(
         enabled = manualUrl.isNotBlank(),
         onClick = { viewModel.validate(manualUrl) },
-    ) { Text("验证") }
+    ) {
+        Text(stringResource(R.string.pairing_validate))
+    }
 }
 
 @Composable
@@ -158,18 +192,23 @@ private fun ScannerScreen(viewModel: MainViewModel) {
         ActivityResultContracts.RequestPermission(),
     ) { granted = it }
     if (!granted) {
-        Text("相机仅在扫码页面使用，不保存画面或二维码图像。")
+        Text(stringResource(R.string.pairing_camera_privacy))
         Button(onClick = { permission.launch(Manifest.permission.CAMERA) }) {
-            Text("允许相机并扫码")
+            Text(stringResource(R.string.pairing_allow_camera))
         }
     } else {
-        ScannerPreview(onDecoded = viewModel::validate)
+        ScannerPreview(
+            contentDescription = stringResource(R.string.pairing_scanner_content_description),
+            onDecoded = viewModel::validate,
+        )
     }
-    TextButton(onClick = viewModel::cancelScan) { Text("返回") }
+    TextButton(onClick = viewModel::cancelScan) {
+        Text(stringResource(R.string.common_back))
+    }
 }
 
 @Composable
-private fun ScannerPreview(onDecoded: (String) -> Unit) {
+private fun ScannerPreview(contentDescription: String, onDecoded: (String) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var controller by remember { mutableStateOf<QrScannerController?>(null) }
@@ -182,7 +221,8 @@ private fun ScannerPreview(onDecoded: (String) -> Unit) {
         },
         modifier = Modifier
             .fillMaxWidth()
-            .height(420.dp),
+            .height(420.dp)
+            .semantics { this.contentDescription = contentDescription },
     )
     DisposableEffect(Unit) {
         onDispose { controller?.close() }
@@ -193,7 +233,10 @@ private fun ScannerPreview(onDecoded: (String) -> Unit) {
 private fun ValidationScreen() {
     Row(verticalAlignment = Alignment.CenterVertically) {
         CircularProgressIndicator()
-        Text("正在连接电脑并验证协议…", modifier = Modifier.padding(start = 12.dp))
+        Text(
+            stringResource(R.string.pairing_validating),
+            modifier = Modifier.padding(start = 12.dp),
+        )
     }
 }
 
@@ -220,14 +263,22 @@ private fun PairedScreen(
         ActivityResultContracts.RequestPermission(),
     ) { notificationGranted = it }
 
-    Text("电脑：${computer.deviceName}")
-    Text("连接：${MainUiProjection.connectionLabel(state)}")
-    Text("地址：${computer.maskedHost}:${computer.port}")
-    Text("协议：${computer.protocolVersion} · 最新 sequence：${computer.lastSequence}")
-    if (state is ConnectionState.Connected) Text("最近连接：${state.connectedAt}")
+    Text(stringResource(R.string.computer_format, computer.deviceName))
+    Text(stringResource(R.string.connection_format, localized(MainUiProjection.connectionText(state))))
+    Text(stringResource(R.string.address_format, computer.maskedHost, computer.port))
+    Text(
+        stringResource(
+            R.string.protocol_sequence_format,
+            computer.protocolVersion,
+            computer.lastSequence,
+        ),
+    )
+    if (state is ConnectionState.Connected) {
+        Text(stringResource(R.string.last_connected_format, state.connectedAt))
+    }
     Spacer(Modifier.height(12.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("持续接收", modifier = Modifier.weight(1f))
+        Text(stringResource(R.string.continuous_receiving), modifier = Modifier.weight(1f))
         Switch(
             checked = computer.continuousReceiving,
             onCheckedChange = viewModel::setContinuousReceiving,
@@ -235,36 +286,50 @@ private fun PairedScreen(
     }
     if (!notificationGranted) {
         Text(
-            "事件已收到，但系统通知权限未开启。WebSocket仍会继续接收。",
+            stringResource(R.string.notification_permission_missing),
             color = MaterialTheme.colorScheme.error,
         )
         if (Build.VERSION.SDK_INT >= 33) {
             Button(onClick = { permission.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
-                Text("允许通知")
+                Text(stringResource(R.string.notification_allow))
             }
         }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = viewModel::openNotificationSettings) { Text("通知设置") }
-        OutlinedButton(onClick = viewModel::openBatterySettings) { Text("电池设置") }
+        OutlinedButton(onClick = viewModel::openNotificationSettings) {
+            Text(stringResource(R.string.notification_settings))
+        }
+        OutlinedButton(onClick = viewModel::openBatterySettings) {
+            Text(stringResource(R.string.battery_settings))
+        }
     }
-    if (viewModel.isXiaomiFamily()) {
-        Text("Xiaomi/Redmi：建议允许后台活动、电池策略设为不限制；如系统提供，请允许自启动。")
-    } else {
-        Text("建议允许后台活动，并将 AgentBell 电池策略设为不限制。")
-    }
-    Text("系统可能限制后台行为；AgentBell不会绕过系统安全策略。")
+    Text(
+        stringResource(
+            if (viewModel.isXiaomiFamily()) {
+                R.string.battery_xiaomi_guidance
+            } else {
+                R.string.battery_general_guidance
+            },
+        ),
+    )
+    Text(stringResource(R.string.background_policy_notice))
     HorizontalDivider(Modifier.padding(vertical = 12.dp))
-    Text("最近事件", style = MaterialTheme.typography.titleMedium)
+    Text(stringResource(R.string.events_recent), style = MaterialTheme.typography.titleMedium)
     LazyColumn(modifier = modifier) {
         items(MainUiProjection.recentEvents(events), key = { it.eventId }) { event ->
             EventCard(event) { viewModel.showEvent(event) }
         }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = viewModel::copyDiagnostics) { Text("复制诊断摘要") }
-        TextButton(onClick = viewModel::rePair) { Text("重新配对") }
-        TextButton(onClick = viewModel::unpair) { Text("取消配对") }
+        TextButton(onClick = viewModel::copyDiagnostics) {
+            Text(stringResource(R.string.diagnostics_copy))
+        }
+        TextButton(onClick = viewModel::rePair) {
+            Text(stringResource(R.string.pairing_repair))
+        }
+        TextButton(onClick = viewModel::unpair) {
+            Text(stringResource(R.string.pairing_unpair))
+        }
     }
 }
 
@@ -277,22 +342,77 @@ private fun EventCard(event: AgentEvent, onClick: () -> Unit) {
             .clickable(onClick = onClick),
     ) {
         Column(Modifier.padding(12.dp)) {
-            Text(event.title, style = MaterialTheme.typography.titleSmall)
+            Text(localizedEventTitle(event), style = MaterialTheme.typography.titleSmall)
             event.project?.let { Text(it) }
-            Text(event.summary ?: "当前回合已经结束。")
-            Text("sequence ${event.sequence}", style = MaterialTheme.typography.bodySmall)
+            Text(event.summary ?: stringResource(R.string.event_turn_ended))
+            Text(
+                stringResource(R.string.event_sequence_format, event.sequence),
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }
 
 @Composable
 private fun EventDetailsScreen(event: AgentEvent, viewModel: MainViewModel) {
-    Text(event.title, style = MaterialTheme.typography.titleLarge)
-    Text("project：${event.project ?: "—"}")
-    Text("summary：${event.summary ?: "当前回合已经结束。"}")
-    Text("occurredAt：${event.occurredAt}")
-    Text("sequence：${event.sequence}")
-    Text("agent：${event.agent}")
-    Text("status：${event.status}")
-    TextButton(onClick = viewModel::closeDetails) { Text("返回") }
+    Text(localizedEventTitle(event), style = MaterialTheme.typography.titleLarge)
+    Text(stringResource(R.string.event_project_format, event.project ?: "—"))
+    Text(
+        stringResource(
+            R.string.event_summary_format,
+            event.summary ?: stringResource(R.string.event_turn_ended),
+        ),
+    )
+    Text(stringResource(R.string.event_occurred_at_format, event.occurredAt))
+    Text(stringResource(R.string.event_sequence_format, event.sequence))
+    Text(stringResource(R.string.event_agent_format, event.agent))
+    Text(stringResource(R.string.event_status_format, event.status))
+    TextButton(onClick = viewModel::closeDetails) {
+        Text(stringResource(R.string.common_back))
+    }
 }
+
+@Composable
+private fun SettingsScreen(viewModel: MainViewModel) {
+    val selected = AppLanguageController.current()
+    Text(stringResource(R.string.common_settings), style = MaterialTheme.typography.titleLarge)
+    Spacer(Modifier.height(12.dp))
+    Text(stringResource(R.string.settings_language), style = MaterialTheme.typography.titleMedium)
+    val options = listOf(
+        AppLanguage.SYSTEM to R.string.language_system,
+        AppLanguage.ENGLISH to R.string.language_english,
+        AppLanguage.CHINESE_SIMPLIFIED to R.string.language_chinese_simplified,
+    )
+    options.forEach { (language, textResource) ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { viewModel.setLanguage(language) }
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(
+                selected = selected == language,
+                onClick = { viewModel.setLanguage(language) },
+            )
+            Text(stringResource(textResource))
+        }
+    }
+    TextButton(onClick = viewModel::closeSettings) {
+        Text(stringResource(R.string.common_back))
+    }
+}
+
+@Composable
+private fun localized(text: UiText): String = stringResource(
+    text.resourceId,
+    *text.arguments.toTypedArray(),
+)
+
+@Composable
+private fun localizedEventTitle(event: AgentEvent): String =
+    if (event.agent == "codex" && event.status == "completed") {
+        stringResource(R.string.event_codex_completed)
+    } else {
+        event.title
+    }

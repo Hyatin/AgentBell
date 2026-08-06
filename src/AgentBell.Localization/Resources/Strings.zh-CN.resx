@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms</value></resheader>
+  <data name="Localization_MissingText" xml:space="preserve"><value>文本不可用</value></data>
+  <data name="Common_About" xml:space="preserve"><value>关于</value></data>
+  <data name="Common_Back" xml:space="preserve"><value>返回</value></data>
+  <data name="Common_Cancel" xml:space="preserve"><value>取消</value></data>
+  <data name="Common_Close" xml:space="preserve"><value>关闭</value></data>
+  <data name="Common_Exit" xml:space="preserve"><value>退出</value></data>
+  <data name="Common_Save" xml:space="preserve"><value>保存</value></data>
+  <data name="Common_Unknown" xml:space="preserve"><value>未知</value></data>
+  <data name="Common_Unavailable" xml:space="preserve"><value>不可用</value></data>
+  <data name="Common_Available" xml:space="preserve"><value>可用</value></data>
+  <data name="Common_Enabled" xml:space="preserve"><value>已启用</value></data>
+  <data name="Common_Disabled" xml:space="preserve"><value>已停用</value></data>
+  <data name="Common_Error" xml:space="preserve"><value>错误</value></data>
+  <data name="Common_Running" xml:space="preserve"><value>正在运行</value></data>
+  <data name="Common_Stopped" xml:space="preserve"><value>已停止</value></data>
+  <data name="Common_NotSet" xml:space="preserve"><value>未设置</value></data>
+  <data name="Settings_Title" xml:space="preserve"><value>设置</value></data>
+  <data name="Settings_Language" xml:space="preserve"><value>语言</value></data>
+  <data name="Language_System" xml:space="preserve"><value>跟随系统</value></data>
+  <data name="Language_English" xml:space="preserve"><value>English</value></data>
+  <data name="Language_ChineseSimplified" xml:space="preserve"><value>简体中文</value></data>
+  <data name="Settings_SaveLanguageFailed" xml:space="preserve"><value>无法保存语言设置。</value></data>
+  <data name="Main_Status" xml:space="preserve"><value>状态</value></data>
+  <data name="Main_Pairing" xml:space="preserve"><value>配对</value></data>
+  <data name="Main_Actions" xml:space="preserve"><value>操作</value></data>
+  <data name="Main_BetaSecurityNotice" xml:space="preserve"><value>当前为 Beta 版 Android APK，Android 可能提示未知来源安装。AgentBell 仅在可信局域网中使用 HTTP/WS，通信并非端到端加密。Windows 防火墙规则仅允许专用网络。Codex Hook 信任确认无法自动绕过。</value></data>
+  <data name="Status_Version" xml:space="preserve"><value>AgentBell 版本</value></data>
+  <data name="Status_LocalHookService" xml:space="preserve"><value>本地 Hook 服务</value></data>
+  <data name="Status_LanService" xml:space="preserve"><value>LAN 服务</value></data>
+  <data name="Status_LanEndpoint" xml:space="preserve"><value>LAN 地址和端口</value></data>
+  <data name="Status_PhoneConnections" xml:space="preserve"><value>手机连接数</value></data>
+  <data name="Status_LastEvent" xml:space="preserve"><value>最近一次事件</value></data>
+  <data name="Status_LatestSequence" xml:space="preserve"><value>最新 sequence</value></data>
+  <data name="Status_StartWithWindows" xml:space="preserve"><value>开机时启动</value></data>
+  <data name="Status_CodexIntegration" xml:space="preserve"><value>Codex 集成</value></data>
+  <data name="Status_AndroidApk" xml:space="preserve"><value>Android APK</value></data>
+  <data name="Status_ConnectionServices" xml:space="preserve"><value>连接状态：Hook {0} / LAN {1}</value></data>
+  <data name="Status_PhoneConnectionCount" xml:space="preserve"><value>手机连接数：{0}</value></data>
+  <data name="Status_NoRecentEvent" xml:space="preserve"><value>最近完成事件：—</value></data>
+  <data name="Status_RecentEvent" xml:space="preserve"><value>最近完成事件：sequence {0} · {1}</value></data>
+  <data name="Status_Starting" xml:space="preserve"><value>正在启动……</value></data>
+  <data name="Status_IntegrationInstalled" xml:space="preserve"><value>已安装</value></data>
+  <data name="Status_IntegrationMissing" xml:space="preserve"><value>未安装</value></data>
+  <data name="Status_IntegrationNeedsRepair" xml:space="preserve"><value>需要修复</value></data>
+  <data name="Status_IntegrationNeedsManualReview" xml:space="preserve"><value>需要手工检查</value></data>
+  <data name="Pairing_ComputerName" xml:space="preserve"><value>电脑：{0}</value></data>
+  <data name="Pairing_CredentialNotice" xml:space="preserve"><value>二维码包含配对凭据。窗口不会以明文显示 Token；关闭窗口也不会删除 Token 或要求手机重新配对。</value></data>
+  <data name="Pairing_RegenerateQr" xml:space="preserve"><value>重新生成二维码</value></data>
+  <data name="Pairing_CopyUrl" xml:space="preserve"><value>复制配对 URL</value></data>
+  <data name="Pairing_CopySensitiveUrlTitle" xml:space="preserve"><value>复制敏感配对 URL</value></data>
+  <data name="Pairing_UrlDisclosureWarning" xml:space="preserve"><value>配对 URL 包含配对凭据。不要发送给不可信人员，并且只在可信局域网使用。是否仍要复制？</value></data>
+  <data name="Pairing_NoLanAddress" xml:space="preserve"><value>当前没有可用的 LAN 配对地址。</value></data>
+  <data name="Pairing_NoUrl" xml:space="preserve"><value>当前没有可用的配对 URL。</value></data>
+  <data name="PairingPage_Connecting" xml:space="preserve"><value>正在连接……</value></data>
+  <data name="PairingPage_Computer" xml:space="preserve"><value>电脑：{0}</value></data>
+  <data name="PairingPage_Protocol" xml:space="preserve"><value>协议</value></data>
+  <data name="PairingPage_LastSequence" xml:space="preserve"><value>最后 sequence</value></data>
+  <data name="PairingPage_RecentEvents" xml:space="preserve"><value>最近事件</value></data>
+  <data name="PairingPage_CodexCompleted" xml:space="preserve"><value>Codex 任务已完成</value></data>
+  <data name="PairingPage_Project" xml:space="preserve"><value>项目：{0}</value></data>
+  <data name="PairingPage_TurnEnded" xml:space="preserve"><value>当前回合已经结束。</value></data>
+  <data name="PairingPage_BrowserReceived" xml:space="preserve"><value>浏览器收到时间 {0}</value></data>
+  <data name="PairingPage_ReconnectDelay" xml:space="preserve"><value>{0} 秒后重新连接</value></data>
+  <data name="PairingPage_MissingCredential" xml:space="preserve"><value>缺少配对凭据</value></data>
+  <data name="PairingPage_WaitingForServer" xml:space="preserve"><value>正在等待服务器……</value></data>
+  <data name="PairingPage_Connected" xml:space="preserve"><value>已连接</value></data>
+  <data name="PairingPage_Disconnected" xml:space="preserve"><value>未连接</value></data>
+  <data name="PairingPage_ProtocolStatus" xml:space="preserve"><value>协议状态：{0}</value></data>
+  <data name="PairingPage_ConnectionFailed" xml:space="preserve"><value>连接失败</value></data>
+  <data name="Action_RepairCodexIntegration" xml:space="preserve"><value>安装或修复 Codex 集成</value></data>
+  <data name="Action_CheckCodexIntegration" xml:space="preserve"><value>检查 Codex 集成</value></data>
+  <data name="Action_ToggleStartup" xml:space="preserve"><value>启用或停用开机启动</value></data>
+  <data name="Action_OpenAndroidFolder" xml:space="preserve"><value>打开 Android APK 文件夹</value></data>
+  <data name="Action_OpenDataFolder" xml:space="preserve"><value>打开数据目录</value></data>
+  <data name="Action_ExportDiagnostics" xml:space="preserve"><value>导出诊断信息</value></data>
+  <data name="Action_StartServices" xml:space="preserve"><value>启动接收服务</value></data>
+  <data name="Action_StopServices" xml:space="preserve"><value>停止接收服务</value></data>
+  <data name="Action_HookTrustNotice" xml:space="preserve"><value>更改 Hook 路径后，Codex 可能要求重新审核。请确认稳定路径属于 AgentBell 后再选择信任。</value></data>
+  <data name="Tray_OpenAgentBell" xml:space="preserve"><value>打开 AgentBell</value></data>
+  <data name="Tray_ShowQrCode" xml:space="preserve"><value>显示二维码</value></data>
+  <data name="Tray_StartWithWindows" xml:space="preserve"><value>开机时启动</value></data>
+  <data name="Tray_Tooltip" xml:space="preserve"><value>AgentBell — {0}</value></data>
+  <data name="WindowsNotification_Title" xml:space="preserve"><value>Codex 任务已完成</value></data>
+  <data name="WindowsNotification_Body" xml:space="preserve"><value>AgentBell 已收到完成事件。</value></data>
+  <data name="Error_LocalServiceStartFailed" xml:space="preserve"><value>本地接收服务无法启动。请检查 127.0.0.1:17863 是否被其他程序占用，然后导出诊断信息。</value></data>
+  <data name="Error_StartupUpdateFailed" xml:space="preserve"><value>无法更新当前用户的开机启动项。</value></data>
+  <data name="Error_OpenFolderFailed" xml:space="preserve"><value>无法打开文件夹。</value></data>
+  <data name="Error_OperationFailed" xml:space="preserve"><value>操作失败。可导出诊断信息进一步检查。</value></data>
+  <data name="Diagnostics_Filter" xml:space="preserve"><value>ZIP 压缩包 (*.zip)|*.zip</value></data>
+  <data name="Diagnostics_ExportSucceeded" xml:space="preserve"><value>脱敏诊断包已导出并通过敏感内容扫描。</value></data>
+  <data name="Diagnostics_ExportFailed" xml:space="preserve"><value>无法导出诊断信息。错误代码：{0}</value></data>
+  <data name="Codex_IntegrationTitle" xml:space="preserve"><value>AgentBell Codex 集成</value></data>
+  <data name="Codex_IntegrationInstalled" xml:space="preserve"><value>Codex 集成已安装。Codex 将要求审核新的稳定 Hook 路径；请确认路径属于 AgentBell 后选择信任。</value></data>
+  <data name="Codex_IntegrationStatus" xml:space="preserve"><value>Codex 集成状态：{0}</value></data>
+  <data name="Codex_HooksInvalid" xml:space="preserve"><value>hooks.json 无效，AgentBell 未覆盖文件。请手工检查：{0}</value></data>
+  <data name="Codex_ManualReviewRequired" xml:space="preserve"><value>发现多个或非标准 AgentBell Hook。为避免误删，请手工检查：{0}</value></data>
+  <data name="Codex_HookExecutableMissing" xml:space="preserve"><value>稳定安装目录中的 AgentBell.Hook.exe 不存在，需要重新安装 AgentBell。</value></data>
+  <data name="Codex_HomeInvalid" xml:space="preserve"><value>CODEX_HOME 无效。</value></data>
+  <data name="Codex_IntegrationOperationFailed" xml:space="preserve"><value>Codex 集成操作失败。错误代码：{0}</value></data>
+  <data name="About_Title" xml:space="preserve"><value>关于 AgentBell</value></data>
+  <data name="About_Content" xml:space="preserve"><value>AgentBell {0}
+协议 {1}
+
+可信局域网 HTTP/WS，并非端到端加密。
+不使用云服务，也不提供自动更新服务。</value></data>
+</root>

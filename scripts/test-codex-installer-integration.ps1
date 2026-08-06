@@ -319,6 +319,7 @@ $uninstallCodexHome = Join-Path $tempRoot 'uninstall CODEX_HOME 中文'
 $setupCodexHome = Join-Path $tempRoot 'setup CODEX_HOME 中文'
 $fallbackProfile = Join-Path $tempRoot 'fallback USERPROFILE 空格中文'
 $fallbackCodexHome = Join-Path $fallbackProfile '.codex'
+$chineseCodexHome = Join-Path $tempRoot 'zhcn CODEX_HOME 中文'
 $setupInstallDirectory = Join-Path $tempRoot 'Install AgentBell 中文'
 $setupLog = Join-Path $tempRoot 'setup.log'
 $partialUninstallLog = Join-Path $tempRoot 'partial-uninstall.log'
@@ -332,13 +333,15 @@ $missingProfileCleanupLog = Join-Path $tempRoot 'missing-profile-cleanup.log'
 $fallbackSetupLog = Join-Path $tempRoot 'fallback-profile-setup.log'
 $fallbackUpgradeLog = Join-Path $tempRoot 'fallback-profile-upgrade.log'
 $fallbackUninstallLog = Join-Path $tempRoot 'fallback-profile-uninstall.log'
+$chineseSetupLog = Join-Path $tempRoot 'zhcn-setup.log'
+$chineseUninstallLog = Join-Path $tempRoot 'zhcn-uninstall.log'
 $failureHomeFile = Join-Path $tempRoot 'not-a-directory'
 $uninstallerPath = Join-Path $setupInstallDirectory 'unins000.exe'
 $setupInstalled = $false
 
 try {
     New-Item -ItemType Directory `
-        -Path $directCodexHome, $uninstallCodexHome, $setupCodexHome, $fallbackProfile `
+        -Path $directCodexHome, $uninstallCodexHome, $setupCodexHome, $fallbackProfile, $chineseCodexHome `
         -Force | Out-Null
 
     Write-Host 'Testing first creation with an isolated missing hooks.json...'
@@ -695,6 +698,7 @@ try {
         $fallbackHooksPath = Join-Path $fallbackCodexHome 'hooks.json'
         $fallbackEnvironment = @{ CODEX_HOME = $null; USERPROFILE = $fallbackProfile }
         $fallbackSetup = Invoke-CapturedProcess -FilePath $SetupPath -Arguments @(
+            '/LANG=en',
             '/VERYSILENT',
             '/SUPPRESSMSGBOXES',
             '/NORESTART',
@@ -712,6 +716,7 @@ try {
 
         [System.IO.File]::WriteAllText($fallbackHooksPath, $setupFixture, $utf8NoBom)
         $fallbackUpgrade = Invoke-CapturedProcess -FilePath $SetupPath -Arguments @(
+            '/LANG=en',
             '/VERYSILENT',
             '/SUPPRESSMSGBOXES',
             '/NORESTART',
@@ -753,6 +758,39 @@ try {
                 throw "USERPROFILE fallback uninstall log omitted required diagnostic marker: $requiredLogText"
             }
         }
+
+        Write-Host 'Testing Simplified Chinese fresh install and stored-language uninstall...'
+        $chineseHooksPath = Join-Path $chineseCodexHome 'hooks.json'
+        [System.IO.File]::WriteAllText($chineseHooksPath, $setupFixture, $utf8NoBom)
+        $chineseSetup = Invoke-CapturedProcess -FilePath $SetupPath -Arguments @(
+            '/LANG=zhcn',
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/NOICONS',
+            '/TASKS=',
+            "/DIR=$setupInstallDirectory",
+            "/LOG=$chineseSetupLog"
+        ) -Environment @{ CODEX_HOME = $chineseCodexHome }
+        if ($chineseSetup.ExitCode -ne 0) {
+            throw "Simplified Chinese Setup failed with exit code $($chineseSetup.ExitCode)."
+        }
+        $setupInstalled = $true
+        Assert-HooksDocument -HooksPath $chineseHooksPath `
+            -ExpectedHookPath (Join-Path $setupInstallDirectory 'AgentBell.Hook.exe') `
+            -RequireOtherHook
+        $chineseSetupLogContent = Get-Content -Raw -LiteralPath $chineseSetupLog
+        if (-not $chineseSetupLogContent.Contains('/LANG=zhcn', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The Simplified Chinese Setup log did not record the selected language.'
+        }
+
+        [void](Invoke-TestUninstaller `
+            -UninstallerPath $uninstallerPath `
+            -InstallDirectory $setupInstallDirectory `
+            -LogPath $chineseUninstallLog `
+            -Environment @{ CODEX_HOME = $chineseCodexHome })
+        $setupInstalled = $false
+        Assert-OnlyOtherHookRemains -HooksPath $chineseHooksPath
 
         if (-not [string]::IsNullOrWhiteSpace($CriticalFailureSetupPath)) {
             Write-Host 'Testing critical uninstall failure returns nonzero and leaves installation intact...'

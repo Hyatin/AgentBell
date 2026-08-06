@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using AgentBell.Localization;
 
 namespace AgentBell.Desktop;
 
@@ -177,6 +178,47 @@ public sealed class AgentBellRuntime : IAsyncDisposable
         return await new PairingQrCodeWriter()
             .WriteAsync(pairingUrl, destination, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>Persists the Windows UI language without replacing pairing credentials.</summary>
+    public async Task<bool> UpdateLanguageAsync(
+        AppLanguage language,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_pairing is not null)
+            {
+                return await _pairing.UpdateLanguageAsync(language, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (string.IsNullOrWhiteSpace(_runtimeOptions.ConfigFilePath))
+            {
+                return false;
+            }
+
+            var store = new AgentBellConfigStore(_runtimeOptions.ConfigFilePath);
+            var load = await store.LoadAsync(cancellationToken).ConfigureAwait(false);
+            if (!load.PersistenceSucceeded || load.Configuration is null)
+            {
+                return false;
+            }
+
+            return await store.SaveAsync(
+                load.Configuration with
+                {
+                    Language = AppLanguageValues.ToPersistedValue(language),
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
     /// <summary>Gets the current token only for in-process sensitive-data scanning.</summary>

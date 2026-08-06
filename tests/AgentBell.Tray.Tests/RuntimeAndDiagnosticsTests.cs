@@ -367,9 +367,9 @@ public sealed class RuntimeAndDiagnosticsTests
         Assert.DoesNotContain("summary", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("token=", text, StringComparison.OrdinalIgnoreCase);
         using var document = JsonDocument.Parse(text);
-        Assert.Equal("0.5.0", document.RootElement.GetProperty("productVersion").GetString());
+        Assert.Equal("0.6.0", document.RootElement.GetProperty("productVersion").GetString());
         Assert.Equal(
-            "0.5.0-beta.1",
+            "0.6.0-beta.1",
             document.RootElement.GetProperty("informationalVersion").GetString());
     }
 

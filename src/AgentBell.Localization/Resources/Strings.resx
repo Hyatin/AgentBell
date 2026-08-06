@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms</value></resheader>
+  <data name="Localization_MissingText" xml:space="preserve"><value>Text unavailable</value></data>
+  <data name="Common_About" xml:space="preserve"><value>About</value></data>
+  <data name="Common_Back" xml:space="preserve"><value>Back</value></data>
+  <data name="Common_Cancel" xml:space="preserve"><value>Cancel</value></data>
+  <data name="Common_Close" xml:space="preserve"><value>Close</value></data>
+  <data name="Common_Exit" xml:space="preserve"><value>Exit</value></data>
+  <data name="Common_Save" xml:space="preserve"><value>Save</value></data>
+  <data name="Common_Unknown" xml:space="preserve"><value>Unknown</value></data>
+  <data name="Common_Unavailable" xml:space="preserve"><value>Unavailable</value></data>
+  <data name="Common_Available" xml:space="preserve"><value>Available</value></data>
+  <data name="Common_Enabled" xml:space="preserve"><value>Enabled</value></data>
+  <data name="Common_Disabled" xml:space="preserve"><value>Disabled</value></data>
+  <data name="Common_Error" xml:space="preserve"><value>Error</value></data>
+  <data name="Common_Running" xml:space="preserve"><value>Running</value></data>
+  <data name="Common_Stopped" xml:space="preserve"><value>Stopped</value></data>
+  <data name="Common_NotSet" xml:space="preserve"><value>Not set</value></data>
+  <data name="Settings_Title" xml:space="preserve"><value>Settings</value></data>
+  <data name="Settings_Language" xml:space="preserve"><value>Language</value></data>
+  <data name="Language_System" xml:space="preserve"><value>Follow system</value></data>
+  <data name="Language_English" xml:space="preserve"><value>English</value></data>
+  <data name="Language_ChineseSimplified" xml:space="preserve"><value>Simplified Chinese</value></data>
+  <data name="Settings_SaveLanguageFailed" xml:space="preserve"><value>Could not save the language setting.</value></data>
+  <data name="Main_Status" xml:space="preserve"><value>Status</value></data>
+  <data name="Main_Pairing" xml:space="preserve"><value>Pairing</value></data>
+  <data name="Main_Actions" xml:space="preserve"><value>Actions</value></data>
+  <data name="Main_BetaSecurityNotice" xml:space="preserve"><value>This is a beta Android APK, so Android may warn about installing from an unknown source. AgentBell uses HTTP/WS only on a trusted private network; traffic is not end-to-end encrypted. The Windows firewall rule allows private networks only. Codex Hook trust review cannot be bypassed automatically.</value></data>
+  <data name="Status_Version" xml:space="preserve"><value>AgentBell version</value></data>
+  <data name="Status_LocalHookService" xml:space="preserve"><value>Local Hook service</value></data>
+  <data name="Status_LanService" xml:space="preserve"><value>LAN service</value></data>
+  <data name="Status_LanEndpoint" xml:space="preserve"><value>LAN address and port</value></data>
+  <data name="Status_PhoneConnections" xml:space="preserve"><value>Connected phones</value></data>
+  <data name="Status_LastEvent" xml:space="preserve"><value>Last event</value></data>
+  <data name="Status_LatestSequence" xml:space="preserve"><value>Latest sequence</value></data>
+  <data name="Status_StartWithWindows" xml:space="preserve"><value>Start with Windows</value></data>
+  <data name="Status_CodexIntegration" xml:space="preserve"><value>Codex integration</value></data>
+  <data name="Status_AndroidApk" xml:space="preserve"><value>Android APK</value></data>
+  <data name="Status_ConnectionServices" xml:space="preserve"><value>Connection status: Hook {0} / LAN {1}</value></data>
+  <data name="Status_PhoneConnectionCount" xml:space="preserve"><value>Connected phones: {0}</value></data>
+  <data name="Status_NoRecentEvent" xml:space="preserve"><value>Last completed event: —</value></data>
+  <data name="Status_RecentEvent" xml:space="preserve"><value>Last completed event: sequence {0} · {1}</value></data>
+  <data name="Status_Starting" xml:space="preserve"><value>Starting…</value></data>
+  <data name="Status_IntegrationInstalled" xml:space="preserve"><value>Installed</value></data>
+  <data name="Status_IntegrationMissing" xml:space="preserve"><value>Missing</value></data>
+  <data name="Status_IntegrationNeedsRepair" xml:space="preserve"><value>Needs repair</value></data>
+  <data name="Status_IntegrationNeedsManualReview" xml:space="preserve"><value>Manual review required</value></data>
+  <data name="Pairing_ComputerName" xml:space="preserve"><value>Computer: {0}</value></data>
+  <data name="Pairing_CredentialNotice" xml:space="preserve"><value>The QR code contains a pairing credential. The token is never shown as text. Closing this window does not delete the token or require the phone to pair again.</value></data>
+  <data name="Pairing_RegenerateQr" xml:space="preserve"><value>Regenerate QR code</value></data>
+  <data name="Pairing_CopyUrl" xml:space="preserve"><value>Copy pairing URL</value></data>
+  <data name="Pairing_CopySensitiveUrlTitle" xml:space="preserve"><value>Copy sensitive pairing URL</value></data>
+  <data name="Pairing_UrlDisclosureWarning" xml:space="preserve"><value>The pairing URL contains a pairing credential. Do not share it with anyone you do not trust, and use it only on a trusted private network. Do you still want to copy it?</value></data>
+  <data name="Pairing_NoLanAddress" xml:space="preserve"><value>No LAN pairing address is currently available.</value></data>
+  <data name="Pairing_NoUrl" xml:space="preserve"><value>No pairing URL is currently available.</value></data>
+  <data name="PairingPage_Connecting" xml:space="preserve"><value>Connecting…</value></data>
+  <data name="PairingPage_Computer" xml:space="preserve"><value>Computer: {0}</value></data>
+  <data name="PairingPage_Protocol" xml:space="preserve"><value>Protocol</value></data>
+  <data name="PairingPage_LastSequence" xml:space="preserve"><value>Last sequence</value></data>
+  <data name="PairingPage_RecentEvents" xml:space="preserve"><value>Recent events</value></data>
+  <data name="PairingPage_CodexCompleted" xml:space="preserve"><value>Codex task completed</value></data>
+  <data name="PairingPage_Project" xml:space="preserve"><value>Project: {0}</value></data>
+  <data name="PairingPage_TurnEnded" xml:space="preserve"><value>The current turn has ended.</value></data>
+  <data name="PairingPage_BrowserReceived" xml:space="preserve"><value>Browser received {0}</value></data>
+  <data name="PairingPage_ReconnectDelay" xml:space="preserve"><value>Reconnecting in {0} seconds</value></data>
+  <data name="PairingPage_MissingCredential" xml:space="preserve"><value>Pairing credential is missing</value></data>
+  <data name="PairingPage_WaitingForServer" xml:space="preserve"><value>Waiting for the server…</value></data>
+  <data name="PairingPage_Connected" xml:space="preserve"><value>Connected</value></data>
+  <data name="PairingPage_Disconnected" xml:space="preserve"><value>Disconnected</value></data>
+  <data name="PairingPage_ProtocolStatus" xml:space="preserve"><value>Protocol status: {0}</value></data>
+  <data name="PairingPage_ConnectionFailed" xml:space="preserve"><value>Connection failed</value></data>
+  <data name="Action_RepairCodexIntegration" xml:space="preserve"><value>Install or repair Codex integration</value></data>
+  <data name="Action_CheckCodexIntegration" xml:space="preserve"><value>Check Codex integration</value></data>
+  <data name="Action_ToggleStartup" xml:space="preserve"><value>Enable or disable startup</value></data>
+  <data name="Action_OpenAndroidFolder" xml:space="preserve"><value>Open Android APK folder</value></data>
+  <data name="Action_OpenDataFolder" xml:space="preserve"><value>Open data folder</value></data>
+  <data name="Action_ExportDiagnostics" xml:space="preserve"><value>Export diagnostics</value></data>
+  <data name="Action_StartServices" xml:space="preserve"><value>Start receiving</value></data>
+  <data name="Action_StopServices" xml:space="preserve"><value>Stop receiving</value></data>
+  <data name="Action_HookTrustNotice" xml:space="preserve"><value>After the Hook path changes, Codex may request another trust review. Confirm that the stable path belongs to AgentBell before trusting it.</value></data>
+  <data name="Tray_OpenAgentBell" xml:space="preserve"><value>Open AgentBell</value></data>
+  <data name="Tray_ShowQrCode" xml:space="preserve"><value>Show QR code</value></data>
+  <data name="Tray_StartWithWindows" xml:space="preserve"><value>Start with Windows</value></data>
+  <data name="Tray_Tooltip" xml:space="preserve"><value>AgentBell — {0}</value></data>
+  <data name="WindowsNotification_Title" xml:space="preserve"><value>Codex task completed</value></data>
+  <data name="WindowsNotification_Body" xml:space="preserve"><value>AgentBell received a completion event.</value></data>
+  <data name="Error_LocalServiceStartFailed" xml:space="preserve"><value>The local receiving service could not start. Check whether another program is using 127.0.0.1:17863, then export diagnostics.</value></data>
+  <data name="Error_StartupUpdateFailed" xml:space="preserve"><value>Could not update startup for the current user.</value></data>
+  <data name="Error_OpenFolderFailed" xml:space="preserve"><value>Could not open the folder.</value></data>
+  <data name="Error_OperationFailed" xml:space="preserve"><value>The operation failed. Export diagnostics for more information.</value></data>
+  <data name="Diagnostics_Filter" xml:space="preserve"><value>ZIP archive (*.zip)|*.zip</value></data>
+  <data name="Diagnostics_ExportSucceeded" xml:space="preserve"><value>The sanitized diagnostic package was exported and passed the sensitive-content scan.</value></data>
+  <data name="Diagnostics_ExportFailed" xml:space="preserve"><value>Could not export diagnostics. Error code: {0}</value></data>
+  <data name="Codex_IntegrationTitle" xml:space="preserve"><value>AgentBell Codex integration</value></data>
+  <data name="Codex_IntegrationInstalled" xml:space="preserve"><value>Codex integration is installed. Codex will request review of the new stable Hook path. Confirm that the path belongs to AgentBell before trusting it.</value></data>
+  <data name="Codex_IntegrationStatus" xml:space="preserve"><value>Codex integration status: {0}</value></data>
+  <data name="Codex_HooksInvalid" xml:space="preserve"><value>hooks.json is invalid and AgentBell did not overwrite it. Review this file: {0}</value></data>
+  <data name="Codex_ManualReviewRequired" xml:space="preserve"><value>Multiple or nonstandard AgentBell Hooks were found. To avoid removing another Hook, review this file: {0}</value></data>
+  <data name="Codex_HookExecutableMissing" xml:space="preserve"><value>AgentBell.Hook.exe is missing from the stable installation directory. Reinstall AgentBell.</value></data>
+  <data name="Codex_HomeInvalid" xml:space="preserve"><value>CODEX_HOME is not valid.</value></data>
+  <data name="Codex_IntegrationOperationFailed" xml:space="preserve"><value>Codex integration failed. Error code: {0}</value></data>
+  <data name="About_Title" xml:space="preserve"><value>About AgentBell</value></data>
+  <data name="About_Content" xml:space="preserve"><value>AgentBell {0}
+Protocol {1}
+
+Trusted local-network HTTP/WS; traffic is not end-to-end encrypted.
+No cloud service or automatic update service.</value></data>
+</root>

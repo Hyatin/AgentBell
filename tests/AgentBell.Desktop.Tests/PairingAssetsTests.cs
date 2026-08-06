@@ -1,4 +1,5 @@
 using System.Net;
+using System.Globalization;
 using System.Text;
 
 namespace AgentBell.Desktop.Tests;
@@ -22,6 +23,22 @@ public sealed class PairingAssetsTests
         Assert.DoesNotContain("http://", html, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("credentialNode", html, StringComparison.Ordinal);
         Assert.DoesNotContain("credential.textContent", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PairingPage_UsesEnglishFallbackAndExactSimplifiedChinese()
+    {
+        var english = PairingPageProvider.ReadHtml(CultureInfo.GetCultureInfo("en-US"));
+        var unsupportedChinese = PairingPageProvider.ReadHtml(CultureInfo.GetCultureInfo("zh-TW"));
+        var simplifiedChinese = PairingPageProvider.ReadHtml(CultureInfo.GetCultureInfo("zh-CN"));
+
+        Assert.Contains("Recent events", english, StringComparison.Ordinal);
+        Assert.Contains("Recent events", unsupportedChinese, StringComparison.Ordinal);
+        Assert.Contains("最近事件", simplifiedChinese, StringComparison.Ordinal);
+        Assert.Contains("lang=\"en-US\"", unsupportedChinese, StringComparison.Ordinal);
+        Assert.Contains("lang=\"zh-CN\"", simplifiedChinese, StringComparison.Ordinal);
+        Assert.DoesNotContain("__LOCALIZED_TEXT__", english, StringComparison.Ordinal);
+        Assert.DoesNotContain("__HTML_", simplifiedChinese, StringComparison.Ordinal);
     }
 
     [Fact]

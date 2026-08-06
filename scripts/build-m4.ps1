@@ -19,6 +19,8 @@ $apkSource = Join-Path $androidRoot 'app\build\outputs\apk\debug\app-debug.apk'
 $installerScript = Join-Path $repoRoot 'installer\AgentBell.iss'
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
+. (Join-Path $PSScriptRoot 'InnoSetupVersion.ps1')
+
 function Write-Step {
     param([Parameter(Mandatory = $true)][string]$Message)
     Write-Host "`n==> $Message" -ForegroundColor Cyan
@@ -277,56 +279,62 @@ function Resolve-AndroidSdk {
 }
 
 function Resolve-InnoCompiler {
-    if (-not [string]::IsNullOrWhiteSpace($env:ISCC_PATH) -and
-        (Test-Path -LiteralPath $env:ISCC_PATH -PathType Leaf)) {
-        return (Resolve-Path -LiteralPath $env:ISCC_PATH).Path
+    $candidatePaths = New-Object System.Collections.Generic.List[string]
+    $useOnlyExplicitCandidate = -not [string]::IsNullOrWhiteSpace($env:ISCC_PATH) -and
+        (Test-Path -LiteralPath $env:ISCC_PATH -PathType Leaf)
+    if ($useOnlyExplicitCandidate) {
+        $candidatePaths.Add([System.IO.Path]::GetFullPath($env:ISCC_PATH))
     }
-
-    $isccCommand = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue
-    if ($null -ne $isccCommand) {
-        return $isccCommand.Source
-    }
-
-    $registryRoots = @(
-        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
-        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
-    )
-
-    foreach ($registryRoot in $registryRoots) {
-        if (-not (Test-Path -LiteralPath $registryRoot)) {
-            continue
+    else {
+        $command = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue
+        if ($null -ne $command) { $candidatePaths.Add($command.Source) }
+        $roots = @(
+            $env:LOCALAPPDATA,
+            $env:ProgramFiles,
+            ${env:ProgramFiles(x86)}
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        foreach ($root in $roots) {
+            foreach ($relativePath in @('Programs\Inno Setup 6\ISCC.exe', 'Inno Setup 6\ISCC.exe')) {
+                $candidate = Join-Path $root $relativePath
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                    $candidatePaths.Add([System.IO.Path]::GetFullPath($candidate))
+                }
+            }
         }
+    }
 
-        $entries = Get-ChildItem -LiteralPath $registryRoot -ErrorAction SilentlyContinue
-        foreach ($entry in $entries) {
-            $properties = Get-ItemProperty -LiteralPath $entry.PSPath -ErrorAction SilentlyContinue
-            if ($null -eq $properties) {
+    $registryCandidates = @(Get-AgentBellInnoSetupRegistryCandidates)
+    if (-not $useOnlyExplicitCandidate) {
+        foreach ($registryCandidate in $registryCandidates) {
+            if ([string]::IsNullOrWhiteSpace([string]$registryCandidate.InstallLocation)) {
                 continue
             }
 
-            $displayNameProperty = $properties.PSObject.Properties['DisplayName']
-            $installLocationProperty = $properties.PSObject.Properties['InstallLocation']
-            if ($null -eq $displayNameProperty -or $null -eq $installLocationProperty) {
-                continue
-            }
-
-            $displayName = [string]$displayNameProperty.Value
-            $installLocation = [string]$installLocationProperty.Value
-            if ([string]::IsNullOrWhiteSpace($displayName) -or
-                -not $displayName.StartsWith('Inno Setup', [StringComparison]::OrdinalIgnoreCase) -or
-                [string]::IsNullOrWhiteSpace($installLocation)) {
-                continue
-            }
-
-            $candidate = Join-Path $installLocation 'ISCC.exe'
+            $candidate = Join-Path ([string]$registryCandidate.InstallLocation) 'ISCC.exe'
             if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-                return (Resolve-Path -LiteralPath $candidate).Path
+                $candidatePaths.Add([System.IO.Path]::GetFullPath($candidate))
             }
         }
     }
 
-    throw 'ISCC.exe was not found through ISCC_PATH, PATH, or an Inno Setup uninstall registry entry. Install a stable Inno Setup release or use -SkipInstaller.'
+    $uniquePaths = @($candidatePaths.ToArray() | Select-Object -Unique)
+    if ($uniquePaths.Count -eq 0) {
+        throw 'ISCC.exe was not found. Set ISCC_PATH or install Inno Setup 6.4.0 or newer.'
+    }
+
+    $compilerCandidates = @($uniquePaths | ForEach-Object {
+        $versionInfo = (Get-Item -LiteralPath $_).VersionInfo
+        [pscustomobject]@{
+            Path = $_
+            ProductVersion = $versionInfo.ProductVersion
+            FileVersion = $versionInfo.FileVersion
+        }
+    })
+
+    return Select-AgentBellInnoSetupCompilerVersion `
+        -CompilerCandidates $compilerCandidates `
+        -RegistryCandidates $registryCandidates `
+        -MinimumVersion ([Version]'6.4.0')
 }
 
 function Publish-SingleFile {
@@ -380,13 +388,11 @@ try {
         Write-Host 'Inno Setup check skipped by -SkipInstaller.' -ForegroundColor Yellow
     }
     else {
-        $iscc = Resolve-InnoCompiler
-        $isccVersion = (Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion
-        $parsedIsccVersion = [Version]($isccVersion.Split('+')[0].Split('-')[0])
-        if ($parsedIsccVersion -lt [Version]'6.4.0') {
-            throw "Inno Setup 6.4.0 or newer is required for safe stdout/stderr capture; detected $isccVersion."
-        }
-        Write-Host "Inno Setup compiler: $iscc ($isccVersion)"
+        $isccVersionResolution = Resolve-InnoCompiler
+        $iscc = $isccVersionResolution.IsccPath
+        Write-Host (
+            "Inno Setup compiler: $iscc ($($isccVersionResolution.Version), " +
+            "source=$($isccVersionResolution.Source))")
     }
 
     Write-Host ".NET SDK: $dotnetVersionText"

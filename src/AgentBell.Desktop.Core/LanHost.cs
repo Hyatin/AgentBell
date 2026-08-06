@@ -83,7 +83,6 @@ public static class LanHost
             throw new ArgumentOutOfRangeException(nameof(port));
         }
 
-        var html = PairingPageProvider.ReadHtml();
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [] });
         builder.Logging.ClearProviders();
         builder.WebHost.ConfigureKestrel(options =>
@@ -119,7 +118,9 @@ public static class LanHost
             context.Response.Headers.XContentTypeOptions = "nosniff";
             context.Response.Headers["Referrer-Policy"] = "no-referrer";
             context.Response.ContentType = "text/html; charset=utf-8";
-            await context.Response.WriteAsync(html, context.RequestAborted).ConfigureAwait(false);
+            await context.Response.WriteAsync(
+                PairingPageProvider.ReadHtml(),
+                context.RequestAborted).ConfigureAwait(false);
         });
 
         application.MapGet(StatusPath, async context =>

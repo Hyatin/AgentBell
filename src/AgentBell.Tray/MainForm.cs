@@ -1,15 +1,17 @@
 using AgentBell.Desktop;
+using AgentBell.Localization;
 
 namespace AgentBell.Tray;
 
-/// <summary>Provides the intentionally small M4 status, pairing, and action window.</summary>
+/// <summary>Provides the small localized status, pairing, settings, and action window.</summary>
 public sealed class MainForm : Form
 {
     private readonly TrayApplicationContext _context;
     private readonly Dictionary<string, Label> _values = new(StringComparer.Ordinal);
-    private readonly PictureBox _pairingQr = new();
-    private readonly Label _serviceHint = new();
+    private TableLayoutPanel? _root;
+    private PictureBox _pairingQr = new();
     private bool _refreshing;
+    private bool _rebuilding;
     private bool _allowClose;
 
     /// <summary>Initializes the main window without rendering a token as text.</summary>
@@ -18,32 +20,10 @@ public sealed class MainForm : Form
         _context = context ?? throw new ArgumentNullException(nameof(context));
         Text = "AgentBell";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(720, 720);
-        Size = new Size(780, 780);
+        MinimumSize = new Size(780, 760);
+        Size = new Size(860, 840);
         AutoScaleMode = AutoScaleMode.Dpi;
-
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoScroll = true,
-            AutoSize = true,
-            ColumnCount = 1,
-            Padding = new Padding(16),
-        };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        Controls.Add(root);
-
-        root.Controls.Add(CreateStatusGroup());
-        root.Controls.Add(CreatePairingGroup());
-        root.Controls.Add(CreateActionsGroup());
-        root.Controls.Add(new Label
-        {
-            AutoSize = true,
-            MaximumSize = new Size(700, 0),
-            Text = "当前为开发测试版 APK，Android 可能提示未知来源安装。M4 使用可信局域网 HTTP/WS，不是端到端加密；Windows 防火墙仅允许专用网络。Codex Hook 信任确认不可自动绕过。",
-            ForeColor = Color.DarkSlateGray,
-            Padding = new Padding(4, 12, 4, 4),
-        });
+        BuildContent();
 
         FormClosing += OnFormClosing;
         FormClosed += (_, _) =>
@@ -55,63 +35,103 @@ public sealed class MainForm : Form
         Shown += (_, _) => BeginRefresh();
     }
 
-    /// <summary>Schedules a safe UI refresh.</summary>
-    public void BeginRefresh()
+    private IAppLocalizer Texts => _context.Localizer;
+
+    /// <summary>Rebuilds all visible controls after a language change.</summary>
+    public void ApplyLanguage()
     {
-        RunUiTask(RefreshAsync);
+        if (InvokeRequired)
+        {
+            BeginInvoke(ApplyLanguage);
+            return;
+        }
+
+        BuildContent();
+        BeginRefresh();
+    }
+
+    /// <summary>Schedules a safe UI refresh.</summary>
+    public void BeginRefresh() => RunUiTask(RefreshAsync);
+
+    private void BuildContent()
+    {
+        _rebuilding = true;
+        try
+        {
+            var image = _pairingQr.Image;
+            _pairingQr.Image = null;
+            var previousRoot = _root;
+            if (previousRoot is not null)
+            {
+                Controls.Remove(previousRoot);
+                previousRoot.Dispose();
+            }
+
+            _pairingQr = new PictureBox { Image = image };
+            _values.Clear();
+            _root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = true,
+                AutoSize = true,
+                ColumnCount = 1,
+                Padding = new Padding(16),
+            };
+            _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            Controls.Add(_root);
+
+            _root.Controls.Add(CreateStatusGroup());
+            _root.Controls.Add(CreatePairingGroup());
+            _root.Controls.Add(CreateSettingsGroup());
+            _root.Controls.Add(CreateActionsGroup());
+            _root.Controls.Add(new Label
+            {
+                AutoSize = true,
+                MaximumSize = new Size(780, 0),
+                Text = Texts.Get("Main_BetaSecurityNotice"),
+                ForeColor = Color.DarkSlateGray,
+                Padding = new Padding(4, 12, 4, 4),
+            });
+        }
+        finally
+        {
+            _rebuilding = false;
+        }
     }
 
     private GroupBox CreateStatusGroup()
     {
-        var group = new GroupBox
-        {
-            Text = "状态",
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            Padding = new Padding(12),
-        };
+        var group = CreateGroup("Main_Status");
         var table = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 2,
         };
-        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        AddStatusRow(table, "version", "AgentBell 版本");
-        AddStatusRow(table, "hook", "本地 Hook 服务");
-        AddStatusRow(table, "lan", "LAN 服务");
-        AddStatusRow(table, "endpoint", "LAN 地址和端口");
-        AddStatusRow(table, "clients", "手机连接数");
-        AddStatusRow(table, "lastEvent", "最近一次事件");
-        AddStatusRow(table, "sequence", "最新 sequence");
-        AddStatusRow(table, "startup", "开机启动");
-        AddStatusRow(table, "integration", "Codex 集成");
-        AddStatusRow(table, "apk", "Android APK");
+        AddStatusRow(table, "version", "Status_Version");
+        AddStatusRow(table, "hook", "Status_LocalHookService");
+        AddStatusRow(table, "lan", "Status_LanService");
+        AddStatusRow(table, "endpoint", "Status_LanEndpoint");
+        AddStatusRow(table, "clients", "Status_PhoneConnections");
+        AddStatusRow(table, "lastEvent", "Status_LastEvent");
+        AddStatusRow(table, "sequence", "Status_LatestSequence");
+        AddStatusRow(table, "startup", "Status_StartWithWindows");
+        AddStatusRow(table, "integration", "Status_CodexIntegration");
+        AddStatusRow(table, "apk", "Status_AndroidApk");
         group.Controls.Add(table);
         return group;
     }
 
     private GroupBox CreatePairingGroup()
     {
-        var group = new GroupBox
-        {
-            Text = "配对",
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            Padding = new Padding(12),
-        };
-        var layout = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-        };
+        var group = CreateGroup("Main_Pairing");
+        var layout = CreateVerticalFlow();
         layout.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = $"电脑名称：{Environment.MachineName}",
+            Text = Texts.Format("Pairing_ComputerName", Environment.MachineName),
         });
         _pairingQr.Size = new Size(280, 280);
         _pairingQr.SizeMode = PictureBoxSizeMode.Zoom;
@@ -120,78 +140,125 @@ public sealed class MainForm : Form
         layout.Controls.Add(new Label
         {
             AutoSize = true,
-            MaximumSize = new Size(680, 0),
-            Text = "二维码包含配对凭据。窗口不会以明文显示 Token；关闭窗口也不会删除 Token 或要求手机重新配对。",
+            MaximumSize = new Size(760, 0),
+            Text = Texts.Get("Pairing_CredentialNotice"),
         });
         var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = true };
-        buttons.Controls.Add(CreateButton("重新生成二维码", () => RegenerateQrAsync()));
-        buttons.Controls.Add(CreateButton("复制配对 URL", () => CopyPairingUrlAsync()));
+        buttons.Controls.Add(CreateButton("Pairing_RegenerateQr", RegenerateQrAsync));
+        buttons.Controls.Add(CreateButton("Pairing_CopyUrl", CopyPairingUrlAsync));
         layout.Controls.Add(buttons);
         group.Controls.Add(layout);
         return group;
     }
 
-    private GroupBox CreateActionsGroup()
+    private GroupBox CreateSettingsGroup()
     {
-        var group = new GroupBox
+        var group = CreateGroup("Settings_Title");
+        var row = new FlowLayoutPanel
         {
-            Text = "操作",
             Dock = DockStyle.Top,
             AutoSize = true,
-            Padding = new Padding(12),
+            WrapContents = true,
+            FlowDirection = FlowDirection.LeftToRight,
         };
+        row.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Text = Texts.Get("Settings_Language"),
+            Padding = new Padding(0, 7, 8, 0),
+        });
+        var language = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 220,
+        };
+        var options = new[]
+        {
+            new LanguageOption(AppLanguage.System, Texts.Get("Language_System")),
+            new LanguageOption(AppLanguage.English, Texts.Get("Language_English")),
+            new LanguageOption(AppLanguage.ChineseSimplified, Texts.Get("Language_ChineseSimplified")),
+        };
+        language.Items.AddRange(options);
+        language.SelectedItem = options.Single(option => option.Value == _context.Language.Current);
+        language.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_rebuilding && language.SelectedItem is LanguageOption selected)
+            {
+                RunUiTask(() => _context.SetLanguageAsync(selected.Value));
+            }
+        };
+        row.Controls.Add(language);
+        group.Controls.Add(row);
+        return group;
+    }
+
+    private GroupBox CreateActionsGroup()
+    {
+        var group = CreateGroup("Main_Actions");
+        var layout = CreateVerticalFlow();
         var buttons = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
             WrapContents = true,
         };
-        buttons.Controls.Add(CreateButton("安装/修复 Codex 集成", _context.RepairIntegrationAsync));
-        buttons.Controls.Add(CreateButton("启用/关闭开机启动", ToggleStartupAsync));
-        buttons.Controls.Add(CreateButton("打开 Android APK 位置", () =>
+        buttons.Controls.Add(CreateButton("Action_RepairCodexIntegration", _context.RepairIntegrationAsync));
+        buttons.Controls.Add(CreateButton("Action_ToggleStartup", ToggleStartupAsync));
+        buttons.Controls.Add(CreateButton("Action_OpenAndroidFolder", () =>
         {
             _context.OpenAndroidFolder();
             return Task.CompletedTask;
         }));
-        buttons.Controls.Add(CreateButton("导出诊断包", _context.ExportDiagnosticsAsync));
-        buttons.Controls.Add(CreateButton("停止接收服务", _context.StopServicesAsync));
-        buttons.Controls.Add(CreateButton("启动接收服务", _context.StartServicesAsync));
-        buttons.Controls.Add(CreateButton("退出", () =>
+        buttons.Controls.Add(CreateButton("Action_ExportDiagnostics", _context.ExportDiagnosticsAsync));
+        buttons.Controls.Add(CreateButton("Action_StopServices", _context.StopServicesAsync));
+        buttons.Controls.Add(CreateButton("Action_StartServices", _context.StartServicesAsync));
+        buttons.Controls.Add(CreateButton("Common_Exit", () =>
         {
             _allowClose = true;
             _context.BeginExit();
             return Task.CompletedTask;
         }));
-        _serviceHint.AutoSize = true;
-        _serviceHint.MaximumSize = new Size(680, 0);
-        _serviceHint.Text = "更改 Hook 路径后，Codex 可能要求重新审核。请确认稳定路径属于 AgentBell 后再选择信任。";
-        var layout = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-        };
         layout.Controls.Add(buttons);
-        layout.Controls.Add(_serviceHint);
+        layout.Controls.Add(new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(760, 0),
+            Text = Texts.Get("Action_HookTrustNotice"),
+        });
         group.Controls.Add(layout);
         return group;
     }
 
-    private void AddStatusRow(TableLayoutPanel table, string key, string caption)
+    private GroupBox CreateGroup(string resourceKey) => new()
+    {
+        Text = Texts.Get(resourceKey),
+        Dock = DockStyle.Top,
+        AutoSize = true,
+        Padding = new Padding(12),
+    };
+
+    private static FlowLayoutPanel CreateVerticalFlow() => new()
+    {
+        Dock = DockStyle.Top,
+        AutoSize = true,
+        FlowDirection = FlowDirection.TopDown,
+        WrapContents = false,
+    };
+
+    private void AddStatusRow(TableLayoutPanel table, string key, string captionKey)
     {
         var row = table.RowCount++;
         table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         table.Controls.Add(new Label
         {
             AutoSize = true,
-            Text = caption,
+            Text = Texts.Get(captionKey),
             Padding = new Padding(0, 4, 8, 4),
         }, 0, row);
         var value = new Label
         {
             AutoSize = true,
-            MaximumSize = new Size(500, 0),
+            MaximumSize = new Size(550, 0),
             Text = "—",
             Padding = new Padding(0, 4, 0, 4),
         };
@@ -199,12 +266,12 @@ public sealed class MainForm : Form
         _values[key] = value;
     }
 
-    private Button CreateButton(string text, Func<Task> action)
+    private Button CreateButton(string textKey, Func<Task> action)
     {
         var button = new Button
         {
             AutoSize = true,
-            Text = text,
+            Text = Texts.Get(textKey),
             Margin = new Padding(4),
         };
         button.Click += (_, _) => RunUiTask(async () =>
@@ -235,7 +302,8 @@ public sealed class MainForm : Form
                 snapshot,
                 integration,
                 _context.Startup.Status(),
-                _context.AndroidApkPath);
+                _context.AndroidApkPath,
+                Texts);
             foreach (var item in projection)
             {
                 if (_values.TryGetValue(item.Key, out var label))
@@ -259,7 +327,7 @@ public sealed class MainForm : Form
             .ConfigureAwait(true);
         if (!success)
         {
-            MessageBox.Show("当前没有可用的 LAN 配对地址。", "AgentBell", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowWarning(Texts.Get("Pairing_NoLanAddress"));
         }
     }
 
@@ -268,13 +336,13 @@ public sealed class MainForm : Form
         var url = _context.Runtime.GetPairingUrl();
         if (string.IsNullOrWhiteSpace(url))
         {
-            MessageBox.Show("当前没有可用的配对 URL。", "AgentBell", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowWarning(Texts.Get("Pairing_NoUrl"));
             return Task.CompletedTask;
         }
 
         var confirmation = MessageBox.Show(
-            PairingUrlDisclosurePolicy.WarningText,
-            "复制敏感配对 URL",
+            PairingUrlDisclosurePolicy.WarningText(Texts),
+            Texts.Get("Pairing_CopySensitiveUrlTitle"),
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button2);
@@ -294,11 +362,17 @@ public sealed class MainForm : Form
             : _context.Startup.Enable();
         if (!result.Success)
         {
-            MessageBox.Show("开机启动项写入失败。", "AgentBell", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowWarning(Texts.Get("Error_StartupUpdateFailed"));
         }
 
         return Task.CompletedTask;
     }
+
+    private void ShowWarning(string message) => MessageBox.Show(
+        message,
+        "AgentBell",
+        MessageBoxButtons.OK,
+        MessageBoxIcon.Warning);
 
     private void LoadQr(string? path)
     {
@@ -341,7 +415,12 @@ public sealed class MainForm : Form
         }
         catch
         {
-            MessageBox.Show("操作失败。可导出脱敏诊断进一步检查。", "AgentBell", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowWarning(Texts.Get("Error_OperationFailed"));
         }
+    }
+
+    private sealed record LanguageOption(AppLanguage Value, string Label)
+    {
+        public override string ToString() => Label;
     }
 }

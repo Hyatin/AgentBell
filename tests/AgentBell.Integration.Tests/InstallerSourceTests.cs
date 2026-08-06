@@ -3,6 +3,43 @@ namespace AgentBell.Integration.Tests;
 public sealed class InstallerSourceTests
 {
     [Fact]
+    public void Installer_ProvidesMatchingEnglishAndSimplifiedChineseCustomMessages()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root, "installer", "AgentBell.iss"));
+        var englishMessages = ReadCustomMessages(source, "en.");
+        var chineseMessages = ReadCustomMessages(source, "zhcn.");
+        var english = englishMessages.Keys;
+        var chinese = chineseMessages.Keys;
+
+        Assert.Equal(english.Order(), chinese.Order());
+        Assert.NotEmpty(english);
+        foreach (var key in english)
+        {
+            Assert.Equal(
+                ReadFormatPlaceholders(englishMessages[key]),
+                ReadFormatPlaceholders(chineseMessages[key]));
+        }
+        Assert.Contains("Name: \"en\"; MessagesFile: \"compiler:Default.isl\"", source);
+        Assert.Contains(
+            "Name: \"zhcn\"; MessagesFile: \"Languages\\ChineseSimplified.isl\"",
+            source);
+        var chineseLanguageFile = Path.Combine(
+            root,
+            "installer",
+            "Languages",
+            "ChineseSimplified.isl");
+        Assert.True(File.Exists(chineseLanguageFile));
+        Assert.Contains(
+            "Inno Setup version 6.5.0+ Chinese Simplified messages",
+            File.ReadAllText(chineseLanguageFile),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("MsgBox(\n        '", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SuppressibleMsgBox(\n      '", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Caption := '", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Installer_CapturesChildDiagnosticsAndPropagatesFailureExitCode()
     {
         var root = FindRepositoryRoot();
@@ -107,6 +144,21 @@ public sealed class InstallerSourceTests
         Assert.Contains("-SetupPath $builtSetup", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void InstallerIntegrationTest_ExercisesEnglishAndSimplifiedChineseSetupLanguages()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "scripts",
+            "test-codex-installer-integration.ps1"));
+
+        Assert.Contains("'/LANG=en'", source, StringComparison.Ordinal);
+        Assert.Contains("'/LANG=zhcn'", source, StringComparison.Ordinal);
+        Assert.Contains("stored-language uninstall", source, StringComparison.Ordinal);
+        Assert.Contains("Assert-OnlyOtherHookRemains -HooksPath $chineseHooksPath", source);
+    }
+
     private static string FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
@@ -135,4 +187,30 @@ public sealed class InstallerSourceTests
 
         return count;
     }
+
+    private static Dictionary<string, string> ReadCustomMessages(string source, string prefix)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in source.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var separator = line.IndexOf('=');
+            Assert.True(separator > prefix.Length);
+            Assert.False(string.IsNullOrWhiteSpace(line[(separator + 1)..]));
+            Assert.True(result.TryAdd(
+                line[prefix.Length..separator],
+                line[(separator + 1)..]));
+        }
+
+        return result;
+    }
+
+    private static string[] ReadFormatPlaceholders(string message) =>
+        System.Text.RegularExpressions.Regex.Matches(message, @"%(?:\d+|n)")
+            .Select(match => match.Value)
+            .ToArray();
 }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="__LANGUAGE__">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -18,15 +18,17 @@
   </style>
 </head>
 <body>
-  <header><h1>AgentBell</h1><strong id="connection" class="warn">正在连接</strong></header>
-  <p id="device" class="muted">电脑：—</p>
-  <p class="muted">协议：<span id="protocol">—</span> · 最后 sequence：<span id="sequence">0</span></p>
+  <header><h1>AgentBell</h1><strong id="connection" class="warn">__HTML_CONNECTING__</strong></header>
+  <p id="device" class="muted">__HTML_COMPUTER_EMPTY__</p>
+  <p class="muted">__HTML_PROTOCOL__: <span id="protocol">—</span> · __HTML_LAST_SEQUENCE__: <span id="sequence">0</span></p>
   <p id="reconnect" class="muted"></p>
-  <h2>最近事件</h2>
+  <h2>__HTML_RECENT_EVENTS__</h2>
   <ol id="events"></ol>
   <script>
   (() => {
     'use strict';
+    const text = __LOCALIZED_TEXT__;
+    const format = (template, value) => template.replace('{0}', String(value));
     const backoffSeconds = [1, 2, 5, 10, 30];
     const fragment = new URLSearchParams(location.hash.slice(1));
     const credential = fragment.get('token') || '';
@@ -63,11 +65,13 @@
       const project = document.createElement('p');
       const summary = document.createElement('p');
       const metadata = document.createElement('p');
-      title.textContent = agentEvent.title || 'Codex 已完成当前回合';
-      project.textContent = agentEvent.project ? `项目：${agentEvent.project}` : '项目：—';
-      summary.textContent = agentEvent.summary || '当前回合已经结束。';
+      title.textContent = agentEvent.agent === 'codex' && agentEvent.status === 'completed'
+        ? text.codexCompleted
+        : (agentEvent.title || text.codexCompleted);
+      project.textContent = format(text.project, agentEvent.project || '—');
+      summary.textContent = agentEvent.summary || text.turnEnded;
       const receivedAt = new Date().toISOString();
-      metadata.textContent = `${agentEvent.occurredAt || ''} · sequence ${agentEvent.sequence || 0} · 浏览器收到 ${receivedAt}`;
+      metadata.textContent = `${agentEvent.occurredAt || ''} · sequence ${agentEvent.sequence || 0} · ${format(text.browserReceived, receivedAt)}`;
       metadata.className = 'muted';
       card.append(title, project, summary, metadata);
       item.append(card);
@@ -82,7 +86,7 @@
       });
       if (!response.ok) throw new Error('unauthorized');
       const status = await response.json();
-      deviceNode.textContent = `电脑：${status.deviceName || '—'}`;
+      deviceNode.textContent = format(text.computer, status.deviceName || '—');
       protocolNode.textContent = String(status.protocolVersion || '—');
       storageKey = `agentbell.lastSequence.${status.deviceId || 'default'}`;
       sequenceNode.textContent = String(readLastSequence());
@@ -91,13 +95,13 @@
     function scheduleReconnect() {
       const delay = backoffSeconds[Math.min(reconnectAttempt, backoffSeconds.length - 1)];
       reconnectAttempt += 1;
-      reconnectNode.textContent = `${delay} 秒后重连`;
+      reconnectNode.textContent = format(text.reconnectDelay, delay);
       setTimeout(connect, delay * 1000);
     }
 
     async function connect() {
       if (!credential) {
-        connectionNode.textContent = '缺少配对凭据';
+        connectionNode.textContent = text.missingCredential;
         reconnectNode.textContent = '';
         return;
       }
@@ -106,15 +110,15 @@
         await verifyStatus();
         const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
         socket = new WebSocket(`${scheme}//${location.host}/ws/v1/events?access_token=${encodeURIComponent(credential)}`);
-        socket.onopen = () => { reconnectNode.textContent = '等待服务器确认'; };
+        socket.onopen = () => { reconnectNode.textContent = text.waitingForServer; };
         socket.onmessage = event => {
           let message;
           try { message = JSON.parse(event.data); } catch { return; }
           if (message.type === 'hello') {
             reconnectAttempt = 0;
-            connectionNode.textContent = 'Connected';
+            connectionNode.textContent = text.connected;
             connectionNode.className = 'ok';
-            deviceNode.textContent = `电脑：${message.deviceName || '—'}`;
+            deviceNode.textContent = format(text.computer, message.deviceName || '—');
             protocolNode.textContent = String(message.protocolVersion || '—');
             storageKey = `agentbell.lastSequence.${message.deviceId || 'default'}`;
             sequenceNode.textContent = String(readLastSequence());
@@ -125,17 +129,17 @@
           } else if (message.type === 'ping') {
             socket.send(JSON.stringify({ type: 'pong', timestamp: message.timestamp }));
           } else if (message.type === 'error') {
-            reconnectNode.textContent = `协议状态：${message.code || 'error'}`;
+            reconnectNode.textContent = format(text.protocolStatus, message.code || 'error');
           }
         };
         socket.onclose = () => {
-          connectionNode.textContent = '已断开';
+          connectionNode.textContent = text.disconnected;
           connectionNode.className = 'warn';
           scheduleReconnect();
         };
         socket.onerror = () => socket.close();
       } catch {
-        connectionNode.textContent = '连接失败';
+        connectionNode.textContent = text.connectionFailed;
         connectionNode.className = 'warn';
         scheduleReconnect();
       }

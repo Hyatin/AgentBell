@@ -1,33 +1,42 @@
 package com.hyatin.agentbell.ui
 
+import com.hyatin.agentbell.R
 import com.hyatin.agentbell.connection.ConnectionState
 import com.hyatin.agentbell.testEvent
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class MainUiProjectionTest {
-    @Test fun exposesAllRequiredConnectionStates() {
-        assertEquals("Unpaired", MainUiProjection.connectionLabel(ConnectionState.Unpaired))
-        assertEquals("Validating", MainUiProjection.connectionLabel(ConnectionState.Validating))
-        assertEquals("Connecting", MainUiProjection.connectionLabel(ConnectionState.Connecting))
+    @Test fun exposesAllRequiredConnectionStatesAsStableResources() {
+        assertEquals(R.string.connection_unpaired, MainUiProjection.connectionText(ConnectionState.Unpaired).resourceId)
+        assertEquals(R.string.connection_validating, MainUiProjection.connectionText(ConnectionState.Validating).resourceId)
+        assertEquals(R.string.connection_connecting, MainUiProjection.connectionText(ConnectionState.Connecting).resourceId)
         assertEquals(
-            "Connected",
-            MainUiProjection.connectionLabel(ConnectionState.Connected("PC", "now")),
+            R.string.connection_connected,
+            MainUiProjection.connectionText(ConnectionState.Connected("PC", "now")).resourceId,
+        )
+        val reconnecting = MainUiProjection.connectionText(ConnectionState.Reconnecting("PC", 5))
+        assertEquals(R.string.connection_reconnecting, reconnecting.resourceId)
+        assertEquals(listOf(5), reconnecting.arguments)
+        assertEquals(R.string.connection_unauthorized, MainUiProjection.connectionText(ConnectionState.Unauthorized).resourceId)
+        assertEquals(R.string.connection_protocol_mismatch, MainUiProjection.connectionText(ConnectionState.ProtocolMismatch).resourceId)
+        assertEquals(R.string.connection_no_network, MainUiProjection.connectionText(ConnectionState.NoNetwork).resourceId)
+        assertEquals(R.string.connection_stopped, MainUiProjection.connectionText(ConnectionState.Stopped).resourceId)
+        assertEquals(R.string.connection_error, MainUiProjection.connectionText(ConnectionState.Error("test_error")).resourceId)
+    }
+
+    @Test fun mapsPairingCodesWithoutDisplayingProtocolCodes() {
+        assertEquals(
+            R.string.pairing_error_unauthorized,
+            MainUiProjection.pairingErrorText("unauthorized").resourceId,
         )
         assertEquals(
-            "Reconnecting（5s）",
-            MainUiProjection.connectionLabel(ConnectionState.Reconnecting("PC", 5)),
+            R.string.pairing_error_invalid_code,
+            MainUiProjection.pairingErrorText("pairing_invalid_token").resourceId,
         )
-        assertEquals("Unauthorized", MainUiProjection.connectionLabel(ConnectionState.Unauthorized))
         assertEquals(
-            "ProtocolMismatch",
-            MainUiProjection.connectionLabel(ConnectionState.ProtocolMismatch),
-        )
-        assertEquals("NoNetwork", MainUiProjection.connectionLabel(ConnectionState.NoNetwork))
-        assertEquals("Stopped", MainUiProjection.connectionLabel(ConnectionState.Stopped))
-        assertEquals(
-            "Error（test_error）",
-            MainUiProjection.connectionLabel(ConnectionState.Error("test_error")),
+            R.string.pairing_error_unavailable,
+            MainUiProjection.pairingErrorText("status_unavailable").resourceId,
         )
     }
 

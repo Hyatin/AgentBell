@@ -3,6 +3,7 @@ package com.hyatin.agentbell.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
@@ -87,6 +88,16 @@ class AgentBellConnectionService : Service() {
         stateNotificationJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        app.notifications.createChannels()
+        when (val state = app.connectionStates.state.value) {
+            is ConnectionState.Connected -> startAsForeground(state.deviceName, true)
+            is ConnectionState.Reconnecting -> startAsForeground(state.deviceName, false)
+            else -> startAsForeground(deviceName = null, connected = false)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

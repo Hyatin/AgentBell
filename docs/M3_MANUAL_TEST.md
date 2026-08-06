@@ -411,3 +411,14 @@ Remove-Item Env:AGENTBELL_DESKTOP_DIAGNOSTICS_PATH -ErrorAction SilentlyContinue
 Do not delete Windows pairing `config.json`, `events.json`, the trusted Stop Hook,
 or the existing Codex `notify` configuration unless performing a separately agreed
 full reset.
+
+## Language verification for 0.6
+
+Open AgentBell Settings > Language and test Follow system, English, and 简体中文.
+Follow system uses Chinese only for an exact `zh-CN` device locale; `zh-TW`,
+`zh-HK`, and every other unsupported locale must show English. Confirm scanner
+instructions, accessibility description, connection states, validation errors,
+foreground notification, notification channel name/description, completion
+notification, and event details. Switch language while connected and confirm the
+WebSocket remains connected and pairing data remains intact. Restart the app and
+confirm the selection persists.

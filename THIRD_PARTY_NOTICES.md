@@ -13,13 +13,14 @@ AgentBell is licensed under Apache-2.0. Its dependencies remain under their resp
 | xunit.runner.visualstudio | 3.1.4 | Apache-2.0 |
 | Microsoft.NET.Test.Sdk | 17.14.1 | MIT |
 | Inno Setup | 6.x toolchain | Inno Setup License; the compiler is not bundled, and compiled installers may be distributed subject to its terms |
+| Inno Setup Simplified Chinese messages | 6.5.0+ | Official translation maintained by Zhenghan Yang and vendored from `jrsoftware/issrc`; distributed under the Inno Setup source terms with upstream attribution retained |
 
 ## Android dependencies
 
 | Component | Version used | License |
 |---|---:|---|
 | Android Gradle Plugin | 9.2.1 | Apache-2.0 |
-| AndroidX Core / Activity | 1.18.0 / 1.13.0 | Apache-2.0 |
+| AndroidX Core / Activity / AppCompat | 1.18.0 / 1.13.0 / 1.7.1 | Apache-2.0 |
 | AndroidX Lifecycle / DataStore | 2.10.0 / 1.2.1 | Apache-2.0 |
 | Jetpack Compose | BOM 2026.06.00 | Apache-2.0 |
 | CameraX | 1.6.1 | Apache-2.0 |

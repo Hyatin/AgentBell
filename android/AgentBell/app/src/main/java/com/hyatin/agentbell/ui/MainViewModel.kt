@@ -11,6 +11,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hyatin.agentbell.AgentBellApplication
 import com.hyatin.agentbell.connection.ConnectionState
+import com.hyatin.agentbell.localization.AppLanguage
+import com.hyatin.agentbell.localization.AppLanguageController
 import com.hyatin.agentbell.notification.AgentBellNotificationManager
 import com.hyatin.agentbell.pairing.PairingValidationResult
 import com.hyatin.agentbell.pairing.PrivateIpv4
@@ -39,6 +41,7 @@ sealed interface MainScreen {
     data object Validating : MainScreen
     data class Paired(val computer: PairedComputer) : MainScreen
     data class EventDetails(val event: AgentEvent) : MainScreen
+    data object Settings : MainScreen
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -123,11 +126,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshPairing()
     }
 
+    fun openSettings() {
+        mutableScreen.value = MainScreen.Settings
+    }
+
+    fun closeSettings() {
+        refreshPairing()
+    }
+
+    fun setLanguage(language: AppLanguage) {
+        AppLanguageController.set(language)
+    }
+
     fun copyDiagnostics() {
         val clipboard = getApplication<Application>()
             .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(
-            ClipData.newPlainText("AgentBell diagnostics", app.diagnostics.sanitizedSummary()),
+            ClipData.newPlainText(
+                getApplication<Application>().getString(com.hyatin.agentbell.R.string.diagnostics_clip_label),
+                app.diagnostics.sanitizedSummary(),
+            ),
         )
     }
 

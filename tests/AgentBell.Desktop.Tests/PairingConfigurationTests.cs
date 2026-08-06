@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AgentBell.Localization;
 
 namespace AgentBell.Desktop.Tests;
 
@@ -55,6 +56,7 @@ public sealed class PairingConfigurationTests
             var raw = await File.ReadAllTextAsync(path);
             Assert.DoesNotContain(token, raw, StringComparison.Ordinal);
             Assert.Contains("encryptedPairingToken", raw, StringComparison.Ordinal);
+            Assert.Equal("system", firstSession.Configuration.Language);
             Assert.NotEqual(
                 new byte[] { 0xEF, 0xBB, 0xBF },
                 File.ReadAllBytes(path).Take(3).ToArray());
@@ -64,6 +66,42 @@ public sealed class PairingConfigurationTests
             using var secondSession = Assert.IsType<PairingConfigurationSession>(second.Session);
             Assert.False(second.TokenRegenerated);
             Assert.Equal(token, secondSession.Token.Value);
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task LanguageUpdate_PersistsWithoutChangingPairingOrConnectionConfiguration()
+    {
+        var directory = CreateDirectory();
+        var path = Path.Combine(directory, "config.json");
+        var protector = new FakePairingTokenProtector();
+        try
+        {
+            var created = await CreateManager(path, protector)
+                .LoadOrCreateAsync(CancellationToken.None);
+            string token;
+            string? deviceId;
+            using (var session = Assert.IsType<PairingConfigurationSession>(created.Session))
+            {
+                token = session.Token.Value;
+                deviceId = session.Configuration.DeviceId;
+                Assert.True(await session.UpdateLanPortAsync(17870, CancellationToken.None));
+                Assert.True(await session.UpdateLanguageAsync(
+                    AppLanguage.ChineseSimplified,
+                    CancellationToken.None));
+            }
+
+            var restored = await CreateManager(path, protector)
+                .LoadOrCreateAsync(CancellationToken.None);
+            using var restoredSession = Assert.IsType<PairingConfigurationSession>(restored.Session);
+            Assert.Equal("zh-CN", restoredSession.Configuration.Language);
+            Assert.Equal(17870, restoredSession.Configuration.LastLanPort);
+            Assert.Equal(deviceId, restoredSession.Configuration.DeviceId);
+            Assert.Equal(token, restoredSession.Token.Value);
         }
         finally
         {

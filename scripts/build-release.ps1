@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+(?:-beta\.\d+)?$')]
-    [string]$Version = '0.5.0-beta.1',
+    [string]$Version = '0.6.0-beta.1',
     [switch]$Clean,
     [switch]$DryRun,
     [switch]$SkipAndroid,
@@ -595,7 +595,7 @@ try {
         Write-Warning 'Installer was skipped because it was requested or no signed release APK is available.'
     }
 
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\releases\v0.5.0-beta.1.md') `
+    Copy-Item -LiteralPath (Join-Path $repoRoot "docs\releases\v$Version.md") `
         -Destination (Join-Path $releaseRoot 'RELEASE_NOTES.md') -Force
 
     $sbom = [ordered]@{

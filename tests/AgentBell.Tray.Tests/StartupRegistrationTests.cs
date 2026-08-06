@@ -25,7 +25,7 @@ public sealed class StartupRegistrationTests
                     "Programs",
                     "AgentBell",
                     "android",
-                    "AgentBell-Android-0.5.0-beta.1.apk"),
+                    "AgentBell-Android-0.6.0-beta.1.apk"),
                 paths.AndroidApkPath);
             Assert.DoesNotContain(wrongEnvironment, startup.ExpectedCommand, StringComparison.OrdinalIgnoreCase);
         }

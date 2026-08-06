@@ -1,20 +1,18 @@
 using System.Diagnostics;
+using System.Globalization;
 using AgentBell.Contracts;
 using AgentBell.Desktop;
 using AgentBell.Integration;
+using AgentBell.Localization;
 using Microsoft.Win32;
 
 namespace AgentBell.Tray;
 
-/// <summary>Owns the NotifyIcon, shared runtime, integration actions, and graceful shutdown.</summary>
+/// <summary>Owns the localized NotifyIcon, shared runtime, integration actions, and shutdown.</summary>
 public sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly SynchronizationContext _uiContext;
     private readonly NotifyIcon _notifyIcon;
-    private readonly ToolStripMenuItem _serviceStatusItem;
-    private readonly ToolStripMenuItem _clientCountItem;
-    private readonly ToolStripMenuItem _recentEventItem;
-    private readonly ToolStripMenuItem _startupItem;
     private readonly System.Windows.Forms.Timer _refreshTimer;
     private readonly AgentBellRuntime _runtime;
     private readonly IntegrationService _integration;
@@ -23,61 +21,51 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly string _dataDirectory;
     private readonly IDesktopDiagnosticLogger _logger;
     private readonly object _exitGate = new();
-
+    private ContextMenuStrip? _menu;
+    private ToolStripMenuItem _serviceStatusItem = null!;
+    private ToolStripMenuItem _clientCountItem = null!;
+    private ToolStripMenuItem _recentEventItem = null!;
+    private ToolStripMenuItem _startupItem = null!;
     private MainForm? _mainForm;
     private Task _startupTask;
+    private long? _lastObservedSequence;
     private bool _exiting;
 
-    /// <summary>Initializes the per-user Tray context with production paths.</summary>
-    public TrayApplicationContext()
+    /// <summary>Initializes the per-user Tray context after culture has been selected.</summary>
+    public TrayApplicationContext(
+        AppLanguageService language,
+        DesktopRuntimeOptions runtimeOptions,
+        AgentBellPathResolver pathResolver,
+        bool usedInvalidLanguageFallback = false)
     {
+        Language = language ?? throw new ArgumentNullException(nameof(language));
+        ArgumentNullException.ThrowIfNull(runtimeOptions);
+        ArgumentNullException.ThrowIfNull(pathResolver);
         _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
-        var pathResolver = new AgentBellPathResolver();
-        var runtimeOptions = DesktopRuntimeOptions.CreateDefault(pathResolver);
         _dataDirectory = Path.GetDirectoryName(runtimeOptions.EventsFilePath)
             ?? throw new InvalidOperationException("AgentBell data path is unavailable.");
         _androidApkPath = pathResolver.AndroidApkPath;
         _logger = new RollingDesktopDiagnosticLogger(
             runtimeOptions.DiagnosticLogPath
                 ?? Path.Combine(_dataDirectory, "logs", "tray.ndjson"));
+        if (usedInvalidLanguageFallback)
+        {
+            RecordUiResult("invalid_language_fallback");
+        }
         _runtime = new AgentBellRuntime(runtimeOptions, _logger);
         _integration = new IntegrationService(
             pathResolver.GetInstalledExecutablePath("AgentBell.Hook.exe"));
         _startup = new StartupRegistration(
             pathResolver.GetInstalledExecutablePath("AgentBell.Tray.exe"));
 
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("打开 AgentBell", null, (_, _) => ShowMainWindow());
-        menu.Items.Add("显示配对二维码", null, (_, _) => ShowMainWindow());
-        menu.Items.Add(new ToolStripSeparator());
-        _serviceStatusItem = new ToolStripMenuItem("连接状态：正在启动") { Enabled = false };
-        _clientCountItem = new ToolStripMenuItem("手机连接数：0") { Enabled = false };
-        _recentEventItem = new ToolStripMenuItem("最近完成事件：—") { Enabled = false };
-        menu.Items.Add(_serviceStatusItem);
-        menu.Items.Add(_clientCountItem);
-        menu.Items.Add(_recentEventItem);
-        menu.Items.Add(new ToolStripSeparator());
-        _startupItem = new ToolStripMenuItem("开机自动启动");
-        _startupItem.Click += (_, _) => RunUiTask(ToggleStartupAsync);
-        menu.Items.Add(_startupItem);
-        menu.Items.Add("安装/修复 Codex 集成", null, (_, _) => RunUiTask(RepairIntegrationAsync));
-        menu.Items.Add("检查 Codex 集成", null, (_, _) => RunUiTask(CheckIntegrationAsync));
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("打开 Android APK 所在文件夹", null, (_, _) => OpenAndroidFolder());
-        menu.Items.Add("打开数据目录", null, (_, _) => OpenFolder(_dataDirectory));
-        menu.Items.Add("导出脱敏诊断", null, (_, _) => RunUiTask(ExportDiagnosticsAsync));
-        menu.Items.Add("关于", null, (_, _) => ShowAbout());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => BeginExit());
-
         _notifyIcon = new NotifyIcon
         {
             Text = "AgentBell",
             Icon = SystemIcons.Information,
-            ContextMenuStrip = menu,
             Visible = true,
         };
         _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
+        RebuildMenu();
 
         _refreshTimer = new System.Windows.Forms.Timer { Interval = 2000 };
         _refreshTimer.Tick += (_, _) => RunUiTask(RefreshMenuAsync);
@@ -95,9 +83,35 @@ public sealed class TrayApplicationContext : ApplicationContext
     /// <summary>Gets current-user startup registration.</summary>
     public StartupRegistration Startup => _startup;
 
+    /// <summary>Gets the Windows language service.</summary>
+    public AppLanguageService Language { get; }
+
+    /// <summary>Gets strings for the effective Windows UI language.</summary>
+    public IAppLocalizer Localizer => Language.Localizer;
+
     /// <summary>Returns current integration status.</summary>
     public Task<CodexIntegrationResult> GetIntegrationStatusAsync(CancellationToken cancellationToken) =>
         _integration.ExecuteAsync("status", cancellationToken);
+
+    /// <summary>Persists and immediately applies a supported Windows UI language.</summary>
+    public async Task SetLanguageAsync(AppLanguage language)
+    {
+        await _startupTask.ConfigureAwait(true);
+        if (!await _runtime.UpdateLanguageAsync(language, CancellationToken.None).ConfigureAwait(true))
+        {
+            MessageBox.Show(
+                Localizer.Get("Settings_SaveLanguageFailed"),
+                "AgentBell",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        Language.SetLanguage(language);
+        RebuildMenu();
+        _mainForm?.ApplyLanguage();
+        await RefreshMenuAsync().ConfigureAwait(true);
+    }
 
     /// <summary>Posts a bounded single-instance IPC command onto the UI thread.</summary>
     public void PostIpcMessage(string message)
@@ -128,7 +142,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             RecordUiResult(exception.ErrorCode);
             MessageBox.Show(
-                "本地接收服务无法启动。请检查 127.0.0.1:17863 是否被其他程序占用，并导出诊断。",
+                Localizer.Get("Error_LocalServiceStartFailed"),
                 "AgentBell",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -147,12 +161,11 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         var result = await _integration.ExecuteAsync("repair", CancellationToken.None)
             .ConfigureAwait(true);
-        var text = result.Success
-            ? "Codex 集成已安装。Codex 将要求审核新的稳定 Hook 路径；请确认路径属于 AgentBell 后选择信任。"
-            : UserFacingIntegrationError(result);
         MessageBox.Show(
-            text,
-            "AgentBell Codex 集成",
+            result.Success
+                ? Localizer.Get("Codex_IntegrationInstalled")
+                : UserFacingIntegrationError(result),
+            Localizer.Get("Codex_IntegrationTitle"),
             MessageBoxButtons.OK,
             result.Success ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
@@ -172,7 +185,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         using var dialog = new SaveFileDialog
         {
-            Filter = "ZIP archive (*.zip)|*.zip",
+            Filter = Localizer.Get("Diagnostics_Filter"),
             FileName = $"AgentBell-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
             AddExtension = true,
             DefaultExt = "zip",
@@ -192,7 +205,9 @@ public sealed class TrayApplicationContext : ApplicationContext
             integration.HooksPath,
             CancellationToken.None).ConfigureAwait(true);
         MessageBox.Show(
-            result.Success ? "脱敏诊断包已导出并通过敏感内容扫描。" : $"诊断导出失败：{result.Code}",
+            result.Success
+                ? Localizer.Get("Diagnostics_ExportSucceeded")
+                : Localizer.Format("Diagnostics_ExportFailed", result.Code),
             "AgentBell",
             MessageBoxButtons.OK,
             result.Success ? MessageBoxIcon.Information : MessageBoxIcon.Error);
@@ -221,10 +236,71 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             SystemEvents.SessionEnding -= OnSessionEnding;
             _refreshTimer.Dispose();
+            _menu?.Dispose();
             _notifyIcon.Dispose();
         }
 
         base.Dispose(disposing);
+    }
+
+    private void RebuildMenu()
+    {
+        var replacement = new ContextMenuStrip();
+        replacement.Items.Add(Localizer.Get("Tray_OpenAgentBell"), null, (_, _) => ShowMainWindow());
+        replacement.Items.Add(Localizer.Get("Tray_ShowQrCode"), null, (_, _) => ShowMainWindow());
+        replacement.Items.Add(new ToolStripSeparator());
+        _serviceStatusItem = new ToolStripMenuItem(
+            Localizer.Format(
+                "Status_ConnectionServices",
+                Localizer.Get("Status_Starting"),
+                Localizer.Get("Status_Starting")))
+        {
+            Enabled = false,
+        };
+        _clientCountItem = new ToolStripMenuItem(Localizer.Format("Status_PhoneConnectionCount", 0))
+        {
+            Enabled = false,
+        };
+        _recentEventItem = new ToolStripMenuItem(Localizer.Get("Status_NoRecentEvent"))
+        {
+            Enabled = false,
+        };
+        replacement.Items.Add(_serviceStatusItem);
+        replacement.Items.Add(_clientCountItem);
+        replacement.Items.Add(_recentEventItem);
+        replacement.Items.Add(new ToolStripSeparator());
+        _startupItem = new ToolStripMenuItem(Localizer.Get("Tray_StartWithWindows"));
+        _startupItem.Click += (_, _) => RunUiTask(ToggleStartupAsync);
+        replacement.Items.Add(_startupItem);
+        replacement.Items.Add(
+            Localizer.Get("Action_RepairCodexIntegration"),
+            null,
+            (_, _) => RunUiTask(RepairIntegrationAsync));
+        replacement.Items.Add(
+            Localizer.Get("Action_CheckCodexIntegration"),
+            null,
+            (_, _) => RunUiTask(CheckIntegrationAsync));
+        replacement.Items.Add(new ToolStripSeparator());
+        replacement.Items.Add(
+            Localizer.Get("Action_OpenAndroidFolder"),
+            null,
+            (_, _) => OpenAndroidFolder());
+        replacement.Items.Add(
+            Localizer.Get("Action_OpenDataFolder"),
+            null,
+            (_, _) => OpenFolder(_dataDirectory));
+        replacement.Items.Add(
+            Localizer.Get("Action_ExportDiagnostics"),
+            null,
+            (_, _) => RunUiTask(ExportDiagnosticsAsync));
+        replacement.Items.Add(Localizer.Get("Common_About"), null, (_, _) => ShowAbout());
+        replacement.Items.Add(new ToolStripSeparator());
+        replacement.Items.Add(Localizer.Get("Common_Exit"), null, (_, _) => BeginExit());
+
+        var previous = _menu;
+        _menu = replacement;
+        _notifyIcon.ContextMenuStrip = replacement;
+        previous?.Dispose();
     }
 
     private async Task StartRuntimeAsync()
@@ -265,12 +341,43 @@ public sealed class TrayApplicationContext : ApplicationContext
     private async Task RefreshMenuAsync()
     {
         var snapshot = await _runtime.GetSnapshotAsync(CancellationToken.None).ConfigureAwait(true);
-        _serviceStatusItem.Text = $"连接状态：Hook {snapshot.LocalHookService} / LAN {snapshot.LanService}";
-        _clientCountItem.Text = $"手机连接数：{snapshot.WebSocketClientCount}";
+        var localStatus = LocalizeRuntimeStatus(snapshot.LocalHookService);
+        var lanStatus = LocalizeRuntimeStatus(snapshot.LanService);
+        _serviceStatusItem.Text = Localizer.Format("Status_ConnectionServices", localStatus, lanStatus);
+        _clientCountItem.Text = Localizer.Format(
+            "Status_PhoneConnectionCount",
+            snapshot.WebSocketClientCount.ToString(CultureInfo.InvariantCulture));
         _recentEventItem.Text = snapshot.LastEventTime is null
-            ? "最近完成事件：—"
-            : $"最近完成事件：sequence {snapshot.LatestSequence} · {snapshot.LastEventTime.Value.ToLocalTime():HH:mm:ss}";
+            ? Localizer.Get("Status_NoRecentEvent")
+            : Localizer.Format(
+                "Status_RecentEvent",
+                snapshot.LatestSequence.ToString(CultureInfo.InvariantCulture),
+                snapshot.LastEventTime.Value.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture));
         _startupItem.Checked = _startup.Status().State == StartupRegistrationState.Enabled;
+        _notifyIcon.Text = Localizer.Format("Tray_Tooltip", localStatus);
+        ShowCompletionNotificationIfNew(snapshot.LatestSequence);
+    }
+
+    private void ShowCompletionNotificationIfNew(long latestSequence)
+    {
+        if (_lastObservedSequence is null || latestSequence < _lastObservedSequence.Value)
+        {
+            _lastObservedSequence = latestSequence;
+            return;
+        }
+
+        if (latestSequence <= _lastObservedSequence.Value)
+        {
+            return;
+        }
+
+        _lastObservedSequence = latestSequence;
+        var notification = WindowsNotificationProjection.Create(Localizer);
+        _notifyIcon.ShowBalloonTip(
+            timeout: 5000,
+            notification.Title,
+            notification.Body,
+            ToolTipIcon.Info);
     }
 
     private Task ToggleStartupAsync()
@@ -281,7 +388,11 @@ public sealed class TrayApplicationContext : ApplicationContext
             : _startup.Enable();
         if (!result.Success)
         {
-            MessageBox.Show("无法更新当前用户的开机启动项。", "AgentBell", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(
+                Localizer.Get("Error_StartupUpdateFailed"),
+                "AgentBell",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
 
         return RefreshMenuAsync();
@@ -291,8 +402,10 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         var result = await GetIntegrationStatusAsync(CancellationToken.None).ConfigureAwait(true);
         MessageBox.Show(
-            result.Success ? $"Codex 集成状态：{result.State}" : UserFacingIntegrationError(result),
-            "AgentBell Codex 集成",
+            result.Success
+                ? Localizer.Format("Codex_IntegrationStatus", LocalizeIntegrationStatus(result.State))
+                : UserFacingIntegrationError(result),
+            Localizer.Get("Codex_IntegrationTitle"),
             MessageBoxButtons.OK,
             result.Success ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
@@ -318,28 +431,50 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private static string UserFacingIntegrationError(CodexIntegrationResult result) =>
-        result.Code switch
-        {
-            "hooks_json_invalid" or "hooks_root_invalid" or "hooks_structure_invalid" =>
-                $"hooks.json 无效，AgentBell 未覆盖文件。请手工检查：{result.HooksPath}",
-            "manual_review_required" =>
-                $"发现多个或非标准 AgentBell Hook。为避免误删，请手工检查：{result.HooksPath}",
-            "hook_executable_missing" => "稳定安装目录中的 AgentBell.Hook.exe 不存在，需要重新安装。",
-            "codex_home_invalid" => "CODEX_HOME 无效。",
-            _ => $"Codex 集成操作失败：{result.Code}",
-        };
+    private string UserFacingIntegrationError(CodexIntegrationResult result) => result.Code switch
+    {
+        "hooks_json_invalid" or "hooks_root_invalid" or "hooks_structure_invalid" =>
+            Localizer.Format("Codex_HooksInvalid", result.HooksPath ?? Localizer.Get("Common_NotSet")),
+        "manual_review_required" =>
+            Localizer.Format(
+                "Codex_ManualReviewRequired",
+                result.HooksPath ?? Localizer.Get("Common_NotSet")),
+        "hook_executable_missing" => Localizer.Get("Codex_HookExecutableMissing"),
+        "codex_home_invalid" => Localizer.Get("Codex_HomeInvalid"),
+        _ => Localizer.Format("Codex_IntegrationOperationFailed", result.Code),
+    };
+
+    private string LocalizeRuntimeStatus(RuntimeServiceStatus status) => status switch
+    {
+        RuntimeServiceStatus.Running => Localizer.Get("Common_Running"),
+        RuntimeServiceStatus.Stopped => Localizer.Get("Common_Stopped"),
+        RuntimeServiceStatus.Available => Localizer.Get("Common_Available"),
+        RuntimeServiceStatus.Unavailable => Localizer.Get("Common_Unavailable"),
+        _ => Localizer.Get("Common_Error"),
+    };
+
+    private string LocalizeIntegrationStatus(CodexIntegrationState status) => status switch
+    {
+        CodexIntegrationState.Installed => Localizer.Get("Status_IntegrationInstalled"),
+        CodexIntegrationState.Missing => Localizer.Get("Status_IntegrationMissing"),
+        CodexIntegrationState.NeedsRepair => Localizer.Get("Status_IntegrationNeedsRepair"),
+        CodexIntegrationState.NeedsManualReview => Localizer.Get("Status_IntegrationNeedsManualReview"),
+        _ => Localizer.Get("Common_Unknown"),
+    };
 
     private void ShowAbout()
     {
         MessageBox.Show(
-            $"AgentBell {AgentBellProduct.InformationalVersion}\nProtocol {AgentBellProtocol.ProtocolVersion}\n\n可信局域网 HTTP/WS；不是端到端加密。\n无云端、无自动更新服务。",
-            "关于 AgentBell",
+            Localizer.Format(
+                "About_Content",
+                AgentBellProduct.InformationalVersion,
+                AgentBellProtocol.ProtocolVersion),
+            Localizer.Get("About_Title"),
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);
     }
 
-    private static void OpenFolder(string path)
+    private void OpenFolder(string path)
     {
         try
         {
@@ -353,7 +488,11 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
         catch
         {
-            MessageBox.Show("无法打开目录。", "AgentBell", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(
+                Localizer.Get("Error_OpenFolderFailed"),
+                "AgentBell",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
     }
 
@@ -386,7 +525,11 @@ public sealed class TrayApplicationContext : ApplicationContext
         catch
         {
             RecordUiResult("ui_action_failed");
-            MessageBox.Show("操作失败。可导出脱敏诊断进一步检查。", "AgentBell", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(
+                Localizer.Get("Error_OperationFailed"),
+                "AgentBell",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
     }
 }

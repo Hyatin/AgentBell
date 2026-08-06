@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.hyatin.agentbell.MainActivity
+import com.hyatin.agentbell.R
 import com.hyatin.agentbell.connection.CompletionNotificationSink
 import com.hyatin.agentbell.protocol.AgentEvent
 import java.security.MessageDigest
@@ -25,20 +26,24 @@ class AgentBellNotificationManager(
         manager.createNotificationChannel(
             NotificationChannel(
                 CONNECTION_CHANNEL_ID,
-                "AgentBell连接服务",
+                context.getString(R.string.notification_connection_channel),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "保持与可信局域网内 AgentBell Desktop 的连接"
+                description = context.getString(
+                    R.string.notification_connection_channel_description,
+                )
                 setShowBadge(false)
             },
         )
         manager.createNotificationChannel(
             NotificationChannel(
                 COMPLETED_CHANNEL_ID,
-                "Codex任务完成",
+                context.getString(R.string.notification_completed_channel),
                 NotificationManager.IMPORTANCE_HIGH,
             ).apply {
-                description = "Codex 当前回合完成提醒"
+                description = context.getString(
+                    R.string.notification_completed_channel_description,
+                )
                 enableVibration(true)
             },
         )
@@ -51,13 +56,20 @@ class AgentBellNotificationManager(
 
     fun connectionNotification(deviceName: String?, connected: Boolean): Notification {
         val text = when {
-            deviceName.isNullOrBlank() -> "AgentBell正在准备连接"
-            connected -> "AgentBell已连接到 $deviceName"
-            else -> "AgentBell正在重新连接 $deviceName"
+            deviceName.isNullOrBlank() ->
+                context.getString(R.string.notification_connection_preparing)
+            connected -> context.getString(
+                R.string.notification_connection_connected,
+                deviceName,
+            )
+            else -> context.getString(
+                R.string.notification_connection_reconnecting,
+                deviceName,
+            )
         }
         return NotificationCompat.Builder(context, CONNECTION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("AgentBell连接服务")
+            .setContentTitle(context.getString(R.string.notification_connection_channel))
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -70,11 +82,16 @@ class AgentBellNotificationManager(
     override fun post(event: AgentEvent): Boolean {
         if (!hasNotificationPermission()) return false
         val title = event.project?.takeIf { it.isNotBlank() }
-            ?.let { "Codex已完成 · ${truncate(it, 80)}" }
-            ?: "Codex已完成"
+            ?.let {
+                context.getString(
+                    R.string.notification_completed_with_project,
+                    truncate(it, 80),
+                )
+            }
+            ?: context.getString(R.string.notification_completed)
         val body = event.summary?.takeIf { it.isNotBlank() }
             ?.let { truncate(it, 320) }
-            ?: "当前回合已经结束。"
+            ?: context.getString(R.string.event_turn_ended)
         val eventKey = stableEventKey(event.eventId)
         val notification = NotificationCompat.Builder(context, COMPLETED_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)

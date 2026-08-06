@@ -597,3 +597,13 @@ Record results for all 26 steps, any Codex trust prompt, the private-only Firewa
 choice, Setup/APK hashes, Android device/OEM version, notification latency, upgrade
 reconnect behavior, and any known limitation. Stop after M4; do not begin M5 from
 this procedure.
+
+## Language verification for 0.6
+
+Run Setup once in English and once in Simplified Chinese using an isolated temporary
+`CODEX_HOME`. Verify localized task descriptions, launch option, Codex integration
+failure/trust prompts, uninstall data option, optional cleanup error, and critical
+uninstall error. The uninstaller must reuse the Setup language. In the installed
+Windows Tray, test Follow system, English, and 简体中文; confirm that the main window,
+tray menu, tooltip, dialogs, and newly loaded pairing page update without changing
+the pairing QR, token, device list, Hook, or WebSocket connection.

@@ -1,5 +1,8 @@
 using System.Net;
 using System.Reflection;
+using System.Globalization;
+using System.Text.Json;
+using AgentBell.Localization;
 using QRCoder;
 
 namespace AgentBell.Desktop;
@@ -10,13 +13,42 @@ public static class PairingPageProvider
     private const string ResourceName = "AgentBell.Desktop.PairingPage.html";
 
     /// <summary>Reads the embedded UTF-8 pairing page.</summary>
-    public static string ReadHtml()
+    public static string ReadHtml(CultureInfo? culture = null)
     {
         using var stream = Assembly.GetExecutingAssembly()
             .GetManifestResourceStream(ResourceName)
             ?? throw new InvalidOperationException("Pairing page resource is unavailable.");
         using var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true);
-        return reader.ReadToEnd();
+        var effectiveCulture = string.Equals(
+            (culture ?? CultureInfo.CurrentUICulture).Name,
+            AppLanguageValues.ChineseSimplified,
+            StringComparison.OrdinalIgnoreCase)
+                ? CultureInfo.GetCultureInfo(AppLanguageValues.ChineseSimplified)
+                : CultureInfo.GetCultureInfo(AppLanguageValues.English);
+        var localizer = new ResourceAppLocalizer(() => effectiveCulture);
+        var localizedText = JsonSerializer.Serialize(new Dictionary<string, string>
+        {
+            ["browserReceived"] = localizer.Get("PairingPage_BrowserReceived"),
+            ["codexCompleted"] = localizer.Get("PairingPage_CodexCompleted"),
+            ["computer"] = localizer.Get("PairingPage_Computer"),
+            ["connected"] = localizer.Get("PairingPage_Connected"),
+            ["connectionFailed"] = localizer.Get("PairingPage_ConnectionFailed"),
+            ["disconnected"] = localizer.Get("PairingPage_Disconnected"),
+            ["missingCredential"] = localizer.Get("PairingPage_MissingCredential"),
+            ["project"] = localizer.Get("PairingPage_Project"),
+            ["protocolStatus"] = localizer.Get("PairingPage_ProtocolStatus"),
+            ["reconnectDelay"] = localizer.Get("PairingPage_ReconnectDelay"),
+            ["turnEnded"] = localizer.Get("PairingPage_TurnEnded"),
+            ["waitingForServer"] = localizer.Get("PairingPage_WaitingForServer"),
+        });
+        return reader.ReadToEnd()
+            .Replace("__LANGUAGE__", effectiveCulture.Name, StringComparison.Ordinal)
+            .Replace("__HTML_CONNECTING__", WebUtility.HtmlEncode(localizer.Get("PairingPage_Connecting")), StringComparison.Ordinal)
+            .Replace("__HTML_COMPUTER_EMPTY__", WebUtility.HtmlEncode(localizer.Format("PairingPage_Computer", "—")), StringComparison.Ordinal)
+            .Replace("__HTML_PROTOCOL__", WebUtility.HtmlEncode(localizer.Get("PairingPage_Protocol")), StringComparison.Ordinal)
+            .Replace("__HTML_LAST_SEQUENCE__", WebUtility.HtmlEncode(localizer.Get("PairingPage_LastSequence")), StringComparison.Ordinal)
+            .Replace("__HTML_RECENT_EVENTS__", WebUtility.HtmlEncode(localizer.Get("PairingPage_RecentEvents")), StringComparison.Ordinal)
+            .Replace("__LOCALIZED_TEXT__", localizedText, StringComparison.Ordinal);
     }
 }
 

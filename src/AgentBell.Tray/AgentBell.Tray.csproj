@@ -11,5 +11,6 @@
     <ProjectReference Include="..\AgentBell.Contracts\AgentBell.Contracts.csproj" />
     <ProjectReference Include="..\AgentBell.Desktop.Core\AgentBell.Desktop.Core.csproj" />
     <ProjectReference Include="..\AgentBell.Integration\AgentBell.Integration.csproj" />
+    <ProjectReference Include="..\AgentBell.Localization\AgentBell.Localization.csproj" />
   </ItemGroup>
 </Project>

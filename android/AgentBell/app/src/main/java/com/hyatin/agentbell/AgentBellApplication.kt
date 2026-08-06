@@ -1,6 +1,7 @@
 package com.hyatin.agentbell
 
 import android.app.Application
+import android.content.res.Configuration
 import com.hyatin.agentbell.connection.ConnectionState
 import com.hyatin.agentbell.connection.ConnectionStateRepository
 import com.hyatin.agentbell.connection.PrivateLanRequestGuard
@@ -72,5 +73,10 @@ class AgentBellApplication : Application() {
                 },
             )
         }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        notifications.createChannels()
     }
 }
