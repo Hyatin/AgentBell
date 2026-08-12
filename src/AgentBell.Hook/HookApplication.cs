@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using AgentBell.Contracts;
 
 namespace AgentBell.Hook;
@@ -217,7 +218,10 @@ public sealed class HookApplication
         }
         catch (Exception exception)
         {
-            result = ForwardResult.Failed(ClassifyContainedFailure(stage, exception));
+            result = ForwardResult.Failed(ClassifyContainedFailure(
+                stage,
+                exception,
+                cancellationToken.IsCancellationRequested));
             failureStage = stage;
             exceptionType = exception.GetType().Name;
         }
@@ -266,9 +270,19 @@ public sealed class HookApplication
         }
     }
 
-    private static string ClassifyContainedFailure(string stage, Exception exception)
+    private static string ClassifyContainedFailure(
+        string stage,
+        Exception exception,
+        bool cancellationRequested)
     {
-        if (string.Equals(stage, "payload_parse", StringComparison.Ordinal))
+        if (exception is OperationCanceledException
+            && cancellationRequested)
+        {
+            return HookErrorCodes.ForwardTimeout;
+        }
+
+        if (string.Equals(stage, "payload_parse", StringComparison.Ordinal)
+            && exception is JsonException)
         {
             return HookErrorCodes.InvalidJson;
         }

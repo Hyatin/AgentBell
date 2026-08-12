@@ -24,9 +24,18 @@ public static class HookEndpointResolver
 
     /// <summary>
     /// Resolves a test port only when test mode is explicit. Invalid test settings
-    /// fail closed to loopback port 1 and can never fall back to production.
+    /// use loopback port 1 as a diagnostic sentinel and can never fall back to production.
     /// </summary>
-    public static Uri Resolve(Func<string, string?>? environmentReader = null)
+    public static Uri Resolve(Func<string, string?>? environmentReader = null) =>
+        ResolveWithAvailability(environmentReader).Endpoint;
+
+    /// <summary>
+    /// Resolves the endpoint together with whether it is safe to contact. Explicit
+    /// test mode never falls back to the production endpoint when its dynamic port
+    /// is absent or malformed.
+    /// </summary>
+    public static HookEndpointResolution ResolveWithAvailability(
+        Func<string, string?>? environmentReader = null)
     {
         environmentReader ??= Environment.GetEnvironmentVariable;
         if (!string.Equals(
@@ -34,15 +43,16 @@ public static class HookEndpointResolver
             "1",
             StringComparison.Ordinal))
         {
-            return ProductionEndpoint;
+            return new HookEndpointResolution(ProductionEndpoint, IsAvailable: true);
         }
 
         var value = environmentReader(TestLoopbackPortEnvironmentVariable);
-        var port = int.TryParse(value, out var parsedPort)
-            && parsedPort is >= 1024 and <= 65535
-                ? parsedPort
-                : 1;
-        return new Uri($"http://127.0.0.1:{port}/api/v1/events/codex");
+        var isAvailable = int.TryParse(value, out var parsedPort)
+            && parsedPort is >= 1024 and <= 65535;
+        var port = isAvailable ? parsedPort : 1;
+        return new HookEndpointResolution(
+            new Uri($"http://127.0.0.1:{port}/api/v1/events/codex"),
+            isAvailable);
     }
 
     /// <summary>
@@ -98,3 +108,6 @@ public static class HookEndpointResolver
             : null;
     }
 }
+
+/// <summary>Describes a loopback endpoint without treating a fail-closed sentinel as usable.</summary>
+public readonly record struct HookEndpointResolution(Uri Endpoint, bool IsAvailable);

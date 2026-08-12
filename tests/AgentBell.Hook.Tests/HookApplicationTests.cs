@@ -164,6 +164,52 @@ public sealed class HookApplicationTests
     }
 
     [Fact]
+    public async Task RunAsync_InputResolutionCanceledByHardDeadline_IsClassifiedAsForwardTimeout()
+    {
+        using var hardDeadline = new CancellationTokenSource();
+        hardDeadline.Cancel();
+        var logger = new CollectingDiagnosticLogger();
+        var application = new HookApplication(
+            new CancelingInputResolver(),
+            new CodexPayloadParser(),
+            new CodexStopHookPayloadParser(),
+            new StubForwarder(ForwardResult.Accepted(202)),
+            logger);
+
+        var exitCode = await application.RunAsync(
+            [HookInputResolver.CodexStopHookOption],
+            Stream.Null,
+            TextWriter.Null,
+            hardDeadline.Token);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(HookErrorCodes.ForwardTimeout, logger.Event?.Result);
+        Assert.Equal("input_resolution", logger.Event?.FailureStage);
+        Assert.Equal(nameof(OperationCanceledException), logger.Event?.ExceptionType);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParserUnknownException_RemainsUnexpectedError()
+    {
+        var logger = new CollectingDiagnosticLogger();
+        var application = new HookApplication(
+            new HookInputResolver(),
+            new ThrowingPayloadParser(),
+            new CodexStopHookPayloadParser(),
+            new StubForwarder(ForwardResult.Accepted(202)),
+            logger);
+
+        var exitCode = await application.RunAsync(
+            ["{\"type\":\"agent-turn-complete\"}"],
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(HookErrorCodes.UnexpectedError, logger.Event?.Result);
+        Assert.Equal("payload_parse", logger.Event?.FailureStage);
+        Assert.Equal(nameof(InvalidOperationException), logger.Event?.ExceptionType);
+    }
+
+    [Fact]
     public async Task RunAsync_DiagnosticLoggerThrows_StillReturnsZero()
     {
         var application = new HookApplication(
@@ -220,6 +266,22 @@ public sealed class HookApplicationTests
     {
         public Task<ForwardResult> ForwardAsync(string rawJson, CancellationToken cancellationToken) =>
             throw new OperationCanceledException("sensitive cancellation text");
+    }
+
+    private sealed class CancelingInputResolver : IHookInputResolver
+    {
+        public ValueTask<HookInputResult> ResolveAsync(
+            IReadOnlyList<string> arguments,
+            Stream standardInput,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromException<HookInputResult>(
+                new OperationCanceledException(cancellationToken));
+    }
+
+    private sealed class ThrowingPayloadParser : ICodexPayloadParser
+    {
+        public CodexPayloadParseResult Parse(IReadOnlyList<string> arguments) =>
+            throw new InvalidOperationException("sensitive parser details");
     }
 
     private sealed class CollectingDiagnosticLogger : IDiagnosticLogger

@@ -253,9 +253,18 @@ public sealed class DesktopHostIntegrationTests
 
             Assert.Equal(1, result.TargetEndpoint.Port);
             Assert.NotEqual(endpoint, result.TargetEndpoint);
-            Assert.Contains(
-                diagnostic.Result,
-                new[] { HookErrorCodes.ForwardUnavailable, HookErrorCodes.ForwardTimeout });
+            Assert.True(
+                string.Equals(
+                    diagnostic.Result,
+                    HookErrorCodes.ForwardUnavailable,
+                    StringComparison.Ordinal),
+                $"Expected fail-closed endpoint classification. "
+                + $"ActualResult={diagnostic.Result}; "
+                + $"FailureStage={diagnostic.FailureStage ?? "none"}; "
+                + $"ExceptionType={diagnostic.ExceptionType ?? "none"}; "
+                + $"ElapsedMs={diagnostic.ElapsedMilliseconds}.");
+            Assert.Null(diagnostic.FailureStage);
+            Assert.Null(diagnostic.ExceptionType);
             Assert.False(requestObserver.GetObservationSince(checkpoint).Received);
             Assert.DoesNotContain(
                 desktopDiagnostics.Events,
@@ -717,7 +726,13 @@ public sealed class DesktopHostIntegrationTests
                 && status.ValueKind == JsonValueKind.Number
                 ? status.GetInt32()
                 : null,
-            root.GetProperty("elapsedMs").GetInt64());
+            root.GetProperty("elapsedMs").GetInt64(),
+            root.TryGetProperty("failureStage", out var failureStage)
+                ? failureStage.GetString()
+                : null,
+            root.TryGetProperty("exceptionType", out var exceptionType)
+                ? exceptionType.GetString()
+                : null);
     }
 
     private static bool IsSuccessfulHookChain(
@@ -900,7 +915,8 @@ public sealed class DesktopHostIntegrationTests
         Assert.True(process.Start());
         var outputTask = process.StandardOutput.ReadToEndAsync();
         var errorTask = process.StandardError.ReadToEndAsync();
-        await process.StandardInput.WriteAsync(stdin);
+        process.StandardInput.Write(stdin);
+        process.StandardInput.Flush();
         process.StandardInput.Close();
 
         using var timeout = new CancellationTokenSource(processTimeout ?? HookProcessTimeout);
@@ -936,7 +952,9 @@ public sealed class DesktopHostIntegrationTests
     private sealed record HookDiagnosticSnapshot(
         string Result,
         int? HttpStatusCode,
-        long ElapsedMilliseconds);
+        long ElapsedMilliseconds,
+        string? FailureStage,
+        string? ExceptionType);
 
     private sealed record HookProcessResult(
         int ExitCode,

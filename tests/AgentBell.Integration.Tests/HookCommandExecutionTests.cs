@@ -567,7 +567,8 @@ public sealed class HookCommandExecutionTests
         Assert.True(process.Start());
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        await process.StandardInput.WriteAsync(stdin);
+        process.StandardInput.Write(stdin);
+        process.StandardInput.Flush();
         process.StandardInput.Close();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await process.WaitForExitAsync(timeout.Token);

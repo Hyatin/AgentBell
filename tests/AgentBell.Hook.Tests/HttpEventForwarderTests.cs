@@ -38,23 +38,57 @@ public sealed class HttpEventForwarderTests
     [Fact]
     public void EndpointResolver_TestModeUsesDedicatedPortAndInvalidSettingsFailClosed()
     {
-        var isolated = HookEndpointResolver.Resolve(name => name switch
+        var isolated = HookEndpointResolver.ResolveWithAvailability(name => name switch
         {
             HookEndpointResolver.TestModeEnvironmentVariable => "1",
             HookEndpointResolver.TestLoopbackPortEnvironmentVariable => "45123",
             _ => null,
         });
-        var invalid = HookEndpointResolver.Resolve(name => name switch
+        var invalid = HookEndpointResolver.ResolveWithAvailability(name => name switch
         {
             HookEndpointResolver.TestModeEnvironmentVariable => "1",
             HookEndpointResolver.TestLoopbackPortEnvironmentVariable => "17863-invalid",
             _ => null,
         });
-        var production = HookEndpointResolver.Resolve(_ => null);
+        var missing = HookEndpointResolver.ResolveWithAvailability(name => name switch
+        {
+            HookEndpointResolver.TestModeEnvironmentVariable => "1",
+            _ => null,
+        });
+        var production = HookEndpointResolver.ResolveWithAvailability(_ => null);
 
-        Assert.Equal("http://127.0.0.1:45123/api/v1/events/codex", isolated.AbsoluteUri);
-        Assert.Equal("http://127.0.0.1:1/api/v1/events/codex", invalid.AbsoluteUri);
-        Assert.Equal(HookEndpointResolver.ProductionEndpoint, production);
+        Assert.True(isolated.IsAvailable);
+        Assert.Equal("http://127.0.0.1:45123/api/v1/events/codex", isolated.Endpoint.AbsoluteUri);
+        Assert.False(invalid.IsAvailable);
+        Assert.Equal("http://127.0.0.1:1/api/v1/events/codex", invalid.Endpoint.AbsoluteUri);
+        Assert.False(missing.IsAvailable);
+        Assert.Equal("http://127.0.0.1:1/api/v1/events/codex", missing.Endpoint.AbsoluteUri);
+        Assert.True(production.IsAvailable);
+        Assert.Equal(HookEndpointResolver.ProductionEndpoint, production.Endpoint);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("malformed")]
+    public async Task ForwardAsync_UnavailableTestEndpoint_FailsClosedWithoutSending(string? port)
+    {
+        var resolution = HookEndpointResolver.ResolveWithAvailability(name => name switch
+        {
+            HookEndpointResolver.TestModeEnvironmentVariable => "1",
+            HookEndpointResolver.TestLoopbackPortEnvironmentVariable => port,
+            _ => null,
+        });
+        var handler = new StubHttpMessageHandler((_, _) =>
+            throw new InvalidOperationException("HTTP must not be attempted"));
+        using var httpClient = new HttpClient(handler);
+        var forwarder = new HttpEventForwarder(httpClient, resolution, timeout: null);
+
+        var result = await forwarder.ForwardAsync(
+            "{\"type\":\"agent-turn-complete\"}",
+            CancellationToken.None);
+
+        Assert.Equal(HookErrorCodes.ForwardUnavailable, result.Code);
+        Assert.Null(result.HttpStatusCode);
     }
 
     [Fact]
@@ -176,6 +210,33 @@ public sealed class HttpEventForwarderTests
         var handler = new StubHttpMessageHandler(async (_, cancellationToken) =>
         {
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.Accepted);
+        });
+        using var httpClient = new HttpClient(handler);
+        var forwarder = new HttpEventForwarder(httpClient, TimeSpan.FromMilliseconds(25));
+
+        var result = await forwarder.ForwardAsync(
+            "{\"type\":\"agent-turn-complete\"}",
+            CancellationToken.None);
+
+        Assert.Equal(HookErrorCodes.ForwardTimeout, result.Code);
+        Assert.Null(result.HttpStatusCode);
+    }
+
+    [Fact]
+    public async Task ForwardAsync_DeadlineWithNonstandardCancellationException_ReturnsTimeout()
+    {
+        var handler = new StubHttpMessageHandler(async (_, cancellationToken) =>
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new IOException("private transport cancellation details");
+            }
+
             return new HttpResponseMessage(HttpStatusCode.Accepted);
         });
         using var httpClient = new HttpClient(handler);

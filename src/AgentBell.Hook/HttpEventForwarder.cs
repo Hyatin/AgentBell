@@ -10,18 +10,41 @@ public sealed class HttpEventForwarder : IEventForwarder
 
     private readonly HttpClient _httpClient;
     private readonly Uri _endpoint;
+    private readonly bool _endpointAvailable;
     private readonly TimeSpan _timeout;
 
     /// <summary>Initializes a loopback event forwarder.</summary>
     /// <param name="httpClient">The HTTP client used for the request.</param>
     /// <param name="timeout">An optional total request timeout; defaults to 500 ms.</param>
     public HttpEventForwarder(HttpClient httpClient, TimeSpan? timeout = null)
-        : this(httpClient, HookEndpointResolver.Resolve(), timeout)
+        : this(httpClient, HookEndpointResolver.ResolveWithAvailability(), timeout)
     {
     }
 
     /// <summary>Initializes a forwarder with an explicit loopback endpoint.</summary>
     public HttpEventForwarder(HttpClient httpClient, Uri endpoint, TimeSpan? timeout = null)
+        : this(httpClient, endpoint, endpointAvailable: true, timeout)
+    {
+    }
+
+    /// <summary>Initializes a forwarder from an endpoint resolution that may fail closed.</summary>
+    public HttpEventForwarder(
+        HttpClient httpClient,
+        HookEndpointResolution endpointResolution,
+        TimeSpan? timeout)
+        : this(
+            httpClient,
+            endpointResolution.Endpoint,
+            endpointResolution.IsAvailable,
+            timeout)
+    {
+    }
+
+    private HttpEventForwarder(
+        HttpClient httpClient,
+        Uri endpoint,
+        bool endpointAvailable,
+        TimeSpan? timeout)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -36,6 +59,7 @@ public sealed class HttpEventForwarder : IEventForwarder
         }
 
         _endpoint = endpoint;
+        _endpointAvailable = endpointAvailable;
         _timeout = timeout ?? DefaultTimeout;
 
         if (_timeout <= TimeSpan.Zero)
@@ -48,6 +72,11 @@ public sealed class HttpEventForwarder : IEventForwarder
     public async Task<ForwardResult> ForwardAsync(string rawJson, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rawJson);
+
+        if (!_endpointAvailable)
+        {
+            return ForwardResult.Failed(HookErrorCodes.ForwardUnavailable);
+        }
 
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(_timeout);
@@ -73,7 +102,11 @@ public sealed class HttpEventForwarder : IEventForwarder
                 ? ForwardResult.Accepted(statusCode)
                 : ForwardResult.Failed(HookErrorCodes.ForwardRejected, statusCode);
         }
-        catch (OperationCanceledException)
+        catch (Exception exception) when (exception is OperationCanceledException or TimeoutException)
+        {
+            return ForwardResult.Failed(HookErrorCodes.ForwardTimeout);
+        }
+        catch (Exception) when (timeoutSource.IsCancellationRequested)
         {
             return ForwardResult.Failed(HookErrorCodes.ForwardTimeout);
         }
