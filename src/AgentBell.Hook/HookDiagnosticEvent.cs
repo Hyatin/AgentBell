@@ -54,6 +54,16 @@ public sealed record HookDiagnosticEvent
     [JsonPropertyName("elapsedMs")]
     public required long ElapsedMilliseconds { get; init; }
 
+    /// <summary>Gets the allow-listed processing stage when a contained failure occurred.</summary>
+    [JsonPropertyName("failureStage")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FailureStage { get; init; }
+
+    /// <summary>Gets the exception type only; exception messages are never recorded.</summary>
+    [JsonPropertyName("exceptionType")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExceptionType { get; init; }
+
     /// <summary>Creates an allow-listed diagnostic record from a payload and processing result.</summary>
     public static HookDiagnosticEvent Create(
         CodexNotifyPayload? payload,
@@ -68,7 +78,9 @@ public sealed record HookDiagnosticEvent
     public static HookDiagnosticEvent Create(
         HookEventMetadata? metadata,
         ForwardResult result,
-        TimeSpan elapsed) =>
+        TimeSpan elapsed,
+        string? failureStage = null,
+        string? exceptionType = null) =>
         new()
         {
             Timestamp = DateTimeOffset.Now,
@@ -89,6 +101,8 @@ public sealed record HookDiagnosticEvent
             Result = result.Code,
             HttpStatusCode = result.HttpStatusCode,
             ElapsedMilliseconds = Math.Max(0, (long)elapsed.TotalMilliseconds),
+            FailureStage = failureStage,
+            ExceptionType = exceptionType,
         };
 
     private static bool IsSessionScopedLifecycle(string? eventType) => eventType is

@@ -15,6 +15,7 @@ using Microsoft.Extensions.Logging;
 
 namespace AgentBell.Desktop.Tests;
 
+[Collection(ProcessIsolatedDesktopCollection.Name)]
 public sealed class DesktopHostIntegrationTests
 {
     private static readonly TimeSpan HostStartupTimeout = TimeSpan.FromSeconds(20);
@@ -25,6 +26,7 @@ public sealed class DesktopHostIntegrationTests
     private static readonly TimeSpan TestHookForwardTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan TestHookConnectTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan HookProcessTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan TestHookProcessHardTimeout = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan ObservationTimeout = TimeSpan.FromSeconds(2);
 
     [Fact]
@@ -857,9 +859,13 @@ public sealed class DesktopHostIntegrationTests
         startInfo.Environment.Remove(HookEndpointResolver.TestLoopbackPortEnvironmentVariable);
         startInfo.Environment.Remove(HookEndpointResolver.TestForwardTimeoutEnvironmentVariable);
         startInfo.Environment.Remove(HookEndpointResolver.TestConnectTimeoutEnvironmentVariable);
+        startInfo.Environment.Remove(HookEndpointResolver.TestProcessTimeoutEnvironmentVariable);
         startInfo.Environment[DiagnosticLoggerFactory.EnabledEnvironmentVariable] = "1";
         startInfo.Environment[DiagnosticLoggerFactory.PathEnvironmentVariable] = diagnosticPath;
         startInfo.Environment[HookEndpointResolver.TestModeEnvironmentVariable] = "1";
+        startInfo.Environment[HookEndpointResolver.TestProcessTimeoutEnvironmentVariable] =
+            checked((int)TestHookProcessHardTimeout.TotalMilliseconds)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (isolatedPort is not null)
         {
             startInfo.Environment[HookEndpointResolver.TestLoopbackPortEnvironmentVariable] =

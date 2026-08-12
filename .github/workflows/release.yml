@@ -35,6 +35,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Initialize release paths
         shell: pwsh
         run: |
@@ -118,7 +119,7 @@ jobs:
             throw "Release build failed with exit code $LASTEXITCODE."
           }
       - name: Upload verified staging artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agentbell-release-${{ steps.metadata.outputs.version }}
           path: artifacts/release/v${{ steps.metadata.outputs.version }}/
@@ -141,16 +142,18 @@ jobs:
   provenance:
     name: Optional GitHub artifact attestation
     needs: build
-    if: needs.build.outputs.publish == 'true' && vars.AGENTBELL_ATTESTATIONS_ENABLED == 'true'
+    if: >-
+      needs.build.result == 'success' && needs.build.outputs.publish == 'true' &&
+      vars.AGENTBELL_ATTESTATIONS_ENABLED == 'true'
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
       artifact-metadata: write
     steps:
       - name: Download verified assets
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: agentbell-release-${{ needs.build.outputs.version }}
           path: release-assets
@@ -165,14 +168,20 @@ jobs:
     name: Publish draft-first GitHub pre-release
     needs: [build, provenance]
     if: >-
-      always() && needs.build.outputs.publish == 'true' &&
+      !cancelled() && needs.build.result == 'success' &&
+      needs.build.outputs.publish == 'true' &&
       (needs.provenance.result == 'success' || needs.provenance.result == 'skipped')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - name: Checkout tag metadata without credentials
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Download verified assets
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: agentbell-release-${{ needs.build.outputs.version }}
           path: release-assets
@@ -182,34 +191,123 @@ jobs:
           set -euo pipefail
           test -s "release-assets/AgentBell-Setup-${{ needs.build.outputs.version }}.exe"
           test -s "release-assets/AgentBell-Android-${{ needs.build.outputs.version }}.apk"
-          ! find release-assets -type f \( -iname '*debug*' -o -iname '*.pdb' -o -iname '*.jks' -o -iname '*.pfx' \) | grep -q .
-      - name: Create draft, upload all assets, then publish as prerelease
+          test -s "release-assets/SHA256SUMS.txt"
+          mapfile -t public_assets < <(
+            find release-assets -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          expected_assets=(
+            "AgentBell-Android-${{ needs.build.outputs.version }}.apk"
+            "AgentBell-Setup-${{ needs.build.outputs.version }}.exe"
+            "RELEASE_NOTES.md"
+            "SBOM.spdx.json"
+            "SHA256SUMS.txt"
+            "release-manifest.json"
+          )
+          mapfile -t expected_assets < <(printf '%s\n' "${expected_assets[@]}" | LC_ALL=C sort)
+          [[ "$(printf '%s\n' "${public_assets[@]}")" == "$(printf '%s\n' "${expected_assets[@]}")" ]]
+      - name: Verify existing release or publish a new draft-first prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TAG: v${{ needs.build.outputs.version }}
           TARGET_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
-          echo "Repository: $REPO"
-          echo "Tag: $TAG"
-          echo "Target commit: $TARGET_SHA"
+          readonly expected_name="AgentBell ${TAG#v}"
+          readonly expected_assets=(
+            "AgentBell-Android-${TAG#v}.apk"
+            "AgentBell-Setup-${TAG#v}.exe"
+            "SHA256SUMS.txt"
+          )
+
+          fail_release_state() {
+            echo "Release verification failed: $1" >&2
+            exit 1
+          }
+
+          verify_asset_names() {
+            local release_json="$1"
+            mapfile -t actual_assets < <(
+              jq -r '.assets[].name' <<<"$release_json" | LC_ALL=C sort)
+            mapfile -t sorted_expected < <(
+              printf '%s\n' "${expected_assets[@]}" | LC_ALL=C sort)
+            if [[ "${#actual_assets[@]}" -ne "${#sorted_expected[@]}" ]] ||
+               [[ "$(printf '%s\n' "${actual_assets[@]}")" != "$(printf '%s\n' "${sorted_expected[@]}")" ]]; then
+              fail_release_state "asset whitelist mismatch"
+            fi
+          }
+
+          verify_release() {
+            local release_json="$1"
+            local tag_name release_name target_commitish draft prerelease
+            tag_name=$(jq -r '.tag_name' <<<"$release_json")
+            release_name=$(jq -r '.name' <<<"$release_json")
+            target_commitish=$(jq -r '.target_commitish' <<<"$release_json")
+            draft=$(jq -r '.draft' <<<"$release_json")
+            prerelease=$(jq -r '.prerelease' <<<"$release_json")
+
+            [[ "$tag_name" == "$TAG" ]] || fail_release_state "tag mismatch"
+            [[ "$release_name" == "$expected_name" ]] || fail_release_state "release name mismatch"
+            [[ "$draft" == "false" ]] || fail_release_state "existing release is unexpectedly a draft"
+            [[ "$prerelease" == "true" ]] || fail_release_state "existing release is not a prerelease"
+            if [[ "$target_commitish" != "main" &&
+                  "$target_commitish" != "$TARGET_SHA" &&
+                  "$target_commitish" != "$tag_sha" ]]; then
+              fail_release_state "release target mismatch"
+            fi
+            verify_asset_names "$release_json"
+          }
+
+          git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null ||
+            fail_release_state "required tag does not exist"
+          tag_sha=$(git rev-parse "$TAG^{commit}")
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            [[ "$tag_sha" == "$TARGET_SHA" ]] || fail_release_state "pushed tag commit mismatch"
+          else
+            git merge-base --is-ancestor "$tag_sha" "$TARGET_SHA" ||
+              fail_release_state "release tag is not an ancestor of the workflow commit"
+          fi
+
+          if release_json=$(gh api "repos/$REPO/releases/tags/$TAG" 2>/dev/null); then
+            verify_release "$release_json"
+            echo "Publish result: already_published_verified"
+            exit 0
+          fi
+          set +e
+          query_response=$(gh api \
+            --include \
+            "repos/$REPO/releases/tags/$TAG" 2>/dev/null)
+          query_exit=$?
+          set -e
+          http_status=$(awk 'NR == 1 { print $2 }' <<<"$query_response")
+          [[ "$query_exit" -ne 0 && "$http_status" == "404" ]] ||
+            fail_release_state "release query failed with HTTP ${http_status:-unknown}"
 
           gh release create "$TAG" \
             --repo "$REPO" \
-            --target "$TARGET_SHA" \
+            --verify-tag \
             --draft \
             --prerelease \
-            --title "AgentBell $TAG" \
+            --title "$expected_name" \
             --notes-file release-assets/RELEASE_NOTES.md
 
           gh release upload "$TAG" \
-            release-assets/* \
-            --repo "$REPO" \
-            --clobber
+            "release-assets/AgentBell-Setup-${TAG#v}.exe" \
+            "release-assets/AgentBell-Android-${TAG#v}.apk" \
+            release-assets/SHA256SUMS.txt \
+            --repo "$REPO"
+
+          draft_json=$(gh api "repos/$REPO/releases/tags/$TAG")
+          [[ "$(jq -r '.draft' <<<"$draft_json")" == "true" ]] ||
+            fail_release_state "new release left draft validation unexpectedly"
+          verify_asset_names "$draft_json"
 
           gh release edit "$TAG" \
             --repo "$REPO" \
             --draft=false \
             --prerelease
+
+          published_json=$(gh api "repos/$REPO/releases/tags/$TAG")
+          verify_release "$published_json"
+          echo "Publish result: published_new_prerelease"

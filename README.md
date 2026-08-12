@@ -4,7 +4,7 @@
 
 AgentBell sends Android system notifications over your trusted LAN when Codex completes a turn or needs your attention on Windows.
 
-> Current public release: `v0.6.0-beta.1` (pre-release). The source tree targets `0.7.0-beta.1`; protocol version 1 remains unchanged.
+> Current public release: `v0.7.0-beta.1` (pre-release). Protocol version 1 remains unchanged.
 
 ## Features and architecture
 
@@ -27,10 +27,10 @@ Windows and Android store language choices independently. The default is **Follo
 
 ## Install
 
-1. Download Setup, the signed release APK, and `SHA256SUMS.txt` from the `v0.6.0-beta.1` GitHub pre-release.
+1. Download Setup, the signed release APK, and `SHA256SUMS.txt` from the `v0.7.0-beta.1` GitHub pre-release.
 2. Verify each SHA-256 hash before running or sideloading it.
 3. Run Setup and choose English or Simplified Chinese. An unsigned Windows beta may trigger Microsoft Defender SmartScreen; continue only after verifying the release source and hash.
-4. When Codex reviews an AgentBell Hook, confirm that it points to the Known Folder installation before trusting it manually. The current public release installs the Stop Hook; 0.7 source builds install Stop, PermissionRequest, and PostToolUse Hooks. AgentBell does not replace or chain `notify`.
+4. When Codex reviews an AgentBell Hook, confirm that it points to the Known Folder installation before trusting it manually. The current public release installs Stop, PermissionRequest, and PostToolUse Hooks. AgentBell does not replace or chain `notify`.
 5. Install the signed release APK. A previously installed debug-signed build usually must be uninstalled first, which removes Android pairing data.
 6. Scan the Tray pairing QR and grant notification permission.
 7. On Xiaomi/Redmi/HyperOS, allow background activity and autostart when available, and set battery use to unrestricted. AgentBell does not bypass OS policy.

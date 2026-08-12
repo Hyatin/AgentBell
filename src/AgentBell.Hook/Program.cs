@@ -26,7 +26,9 @@ try
             HookEndpointResolver.ResolveTestForwardTimeout()),
         DiagnosticLoggerFactory.CreateFromEnvironment());
 
-    using var hardTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+    using var hardTimeout = new CancellationTokenSource(
+        HookEndpointResolver.ResolveTestProcessTimeout()
+        ?? TimeSpan.FromSeconds(3));
     return await application.RunAsync(
         args,
         Console.OpenStandardInput(),

@@ -2,7 +2,14 @@
 
 All notable changes follow Keep a Changelog conventions. This project uses semantic versions with prerelease suffixes.
 
-## [0.7.0-beta.1] - Unreleased
+## [Unreleased]
+
+### Fixed
+
+- Isolated Windows Hook process tests now retain a bounded diagnostic margin beyond their HTTP forwarding deadline and serialize only the child-process integration collections that compete for constrained runner resources.
+- Guarded release reruns stop before artifact download when the verified build fails and safely verify an already-published prerelease without replacing public assets.
+
+## [0.7.0-beta.1] - 2026-08-12
 
 ### Added
 
@@ -60,5 +67,6 @@ All notable changes follow Keep a Changelog conventions. This project uses seman
 - Documented unsigned Windows beta, SmartScreen, trusted-LAN, QR, Hook, and signing-key risks.
 
 [0.7.0-beta.1]: https://github.com/OWNER/AgentBell/compare/v0.6.0-beta.1...v0.7.0-beta.1
+[Unreleased]: https://github.com/OWNER/AgentBell/compare/v0.7.0-beta.1...HEAD
 [0.6.0-beta.1]: https://github.com/OWNER/AgentBell/releases/tag/v0.6.0-beta.1
 [0.5.0-beta.1]: https://github.com/OWNER/AgentBell/releases/tag/v0.5.0-beta.1

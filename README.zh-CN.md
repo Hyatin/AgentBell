@@ -4,7 +4,7 @@
 
 AgentBell 在 Codex 完成当前回合或需要用户处理时，通过可信局域网把通知从 Windows 电脑发送到 Android 系统通知栏。
 
-> 当前公开版本：`v0.6.0-beta.1`（预发布）。源码树的目标版本为 `0.7.0-beta.1`，协议版本仍为 1。
+> 当前公开版本：`v0.7.0-beta.1`（预发布）。协议版本仍为 1。
 
 ## 功能与架构
 
@@ -27,10 +27,10 @@ Windows 和 Android 分别保存语言选择，首次启动默认“跟随系统
 
 ## 安装
 
-1. 从 `v0.6.0-beta.1` GitHub Pre-release 下载 Setup、已签名 release APK 和 `SHA256SUMS.txt`。
+1. 从 `v0.7.0-beta.1` GitHub Pre-release 下载 Setup、已签名 release APK 和 `SHA256SUMS.txt`。
 2. 运行或安装前验证每个文件的 SHA-256。
 3. 运行 Setup 并选择 English 或简体中文。未使用可信代码签名证书的 Windows Beta 可能触发 SmartScreen；只应在核对发布来源和哈希后继续。
-4. Codex 审核 AgentBell Hook 时，确认其指向 Known Folder 安装目录，再手工信任。当前公开版安装 Stop Hook；0.7 源码构建安装 Stop、PermissionRequest 与 PostToolUse Hook。AgentBell 不替换或链接 `notify`。
+4. Codex 审核 AgentBell Hook 时，确认其指向 Known Folder 安装目录，再手工信任。当前公开版安装 Stop、PermissionRequest 与 PostToolUse Hook。AgentBell 不替换或链接 `notify`。
 5. 安装已签名的 release APK。若设备已有 debug 签名版本，通常必须先卸载，这会删除 Android 配对数据。
 6. 扫描 Tray 中的配对二维码并授予通知权限。
 7. Xiaomi/Redmi/HyperOS 建议允许后台活动和自启动（如系统提供），并将电池策略设为不限制。AgentBell 不绕过系统策略。

@@ -86,6 +86,31 @@ public sealed class HttpEventForwarderTests
     }
 
     [Fact]
+    public void ProcessTimeoutResolver_RequiresTestModeAndKeepsProductionDeadlineUnchanged()
+    {
+        static string? ReadIsolated(string name) => name switch
+        {
+            HookEndpointResolver.TestModeEnvironmentVariable => "1",
+            HookEndpointResolver.TestProcessTimeoutEnvironmentVariable => "8000",
+            _ => null,
+        };
+
+        var isolated = HookEndpointResolver.ResolveTestProcessTimeout(ReadIsolated);
+        var production = HookEndpointResolver.ResolveTestProcessTimeout(name =>
+            name == HookEndpointResolver.TestProcessTimeoutEnvironmentVariable ? "8000" : null);
+        var tooLarge = HookEndpointResolver.ResolveTestProcessTimeout(name => name switch
+        {
+            HookEndpointResolver.TestModeEnvironmentVariable => "1",
+            HookEndpointResolver.TestProcessTimeoutEnvironmentVariable => "15001",
+            _ => null,
+        });
+
+        Assert.Equal(TimeSpan.FromSeconds(8), isolated);
+        Assert.Null(production);
+        Assert.Null(tooLarge);
+    }
+
+    [Fact]
     public void ConnectTimeoutResolver_RequiresTestModeAndAcceptsOnlyBoundedMilliseconds()
     {
         static string? Read(

@@ -136,6 +136,31 @@ public sealed class HookApplicationTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(HookErrorCodes.UnexpectedError, logger.Event?.Result);
+        Assert.Equal("http_forward", logger.Event?.FailureStage);
+        Assert.Equal(nameof(InvalidOperationException), logger.Event?.ExceptionType);
+        var diagnosticJson = JsonSerializer.Serialize(logger.Event);
+        Assert.DoesNotContain("sensitive exception text", diagnosticJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_ForwarderCancellation_IsClassifiedAsForwardTimeout()
+    {
+        var logger = new CollectingDiagnosticLogger();
+        var application = new HookApplication(
+            new HookInputResolver(),
+            new CodexPayloadParser(),
+            new CodexStopHookPayloadParser(),
+            new CancelingForwarder(),
+            logger);
+
+        var exitCode = await application.RunAsync(
+            ["{\"type\":\"agent-turn-complete\"}"],
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(HookErrorCodes.ForwardTimeout, logger.Event?.Result);
+        Assert.Equal("http_forward", logger.Event?.FailureStage);
+        Assert.Equal(nameof(OperationCanceledException), logger.Event?.ExceptionType);
     }
 
     [Fact]
@@ -189,6 +214,12 @@ public sealed class HookApplicationTests
     {
         public Task<ForwardResult> ForwardAsync(string rawJson, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("sensitive exception text");
+    }
+
+    private sealed class CancelingForwarder : IEventForwarder
+    {
+        public Task<ForwardResult> ForwardAsync(string rawJson, CancellationToken cancellationToken) =>
+            throw new OperationCanceledException("sensitive cancellation text");
     }
 
     private sealed class CollectingDiagnosticLogger : IDiagnosticLogger

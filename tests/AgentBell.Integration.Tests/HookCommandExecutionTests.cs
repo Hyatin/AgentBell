@@ -16,6 +16,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace AgentBell.Integration.Tests;
 
+[Collection(ProcessIsolatedIntegrationCollection.Name)]
 public sealed class HookCommandExecutionTests
 {
     private static readonly TimeSpan ServiceStartupTimeout = TimeSpan.FromSeconds(20);
@@ -24,6 +25,7 @@ public sealed class HookCommandExecutionTests
     private static readonly TimeSpan EventCompletionTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan TestHookForwardTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan TestHookConnectTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan TestHookProcessHardTimeout = TimeSpan.FromSeconds(8);
 
     [Fact]
     public async Task CommandWindows_SpacesAndChinese_OfflinePreservesContractAndFailsFast()
@@ -77,10 +79,15 @@ public sealed class HookCommandExecutionTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(HookApplication.StopHookContinueResponse, result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
-        var line = Assert.Single(await File.ReadAllLinesAsync(diagnosticPath));
-        using var diagnostic = JsonDocument.Parse(line);
-        Assert.Equal("success", diagnostic.RootElement.GetProperty("result").GetString());
-        Assert.Equal(202, diagnostic.RootElement.GetProperty("httpStatus").GetInt32());
+        var diagnostic = ReadHookDiagnostic(diagnosticPath);
+        Assert.True(
+            string.Equals(diagnostic.Result, ForwardResult.SuccessCode, StringComparison.Ordinal)
+            && diagnostic.HttpStatusCode == (int)HttpStatusCode.Accepted,
+            CreateDesktopProcessFailureDiagnostic(
+                endpoint,
+                desktop,
+                result,
+                diagnostic));
         var events = await new JsonEventStore(eventsPath)
             .LoadAsync(CancellationToken.None);
         Assert.Single(events.Events);
@@ -525,9 +532,13 @@ public sealed class HookCommandExecutionTests
         startInfo.Environment.Remove(DiagnosticLoggerFactory.PathEnvironmentVariable);
         startInfo.Environment.Remove(HookEndpointResolver.TestForwardTimeoutEnvironmentVariable);
         startInfo.Environment.Remove(HookEndpointResolver.TestConnectTimeoutEnvironmentVariable);
+        startInfo.Environment.Remove(HookEndpointResolver.TestProcessTimeoutEnvironmentVariable);
         startInfo.Environment[HookEndpointResolver.TestModeEnvironmentVariable] = "1";
         startInfo.Environment[HookEndpointResolver.TestLoopbackPortEnvironmentVariable] =
             isolatedPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        startInfo.Environment[HookEndpointResolver.TestProcessTimeoutEnvironmentVariable] =
+            checked((int)TestHookProcessHardTimeout.TotalMilliseconds)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
         var codexHome = Path.Combine(isolationRoot, "codex-home");
         var dataHome = Path.Combine(isolationRoot, "data-home");
         Directory.CreateDirectory(codexHome);
@@ -741,13 +752,13 @@ public sealed class HookCommandExecutionTests
     {
         if (!File.Exists(path))
         {
-            return new HookDiagnosticSnapshot("missing", null, 0);
+            return new HookDiagnosticSnapshot("missing", null, 0, null, null);
         }
 
         var lines = File.ReadAllLines(path);
         if (lines.Length != 1)
         {
-            return new HookDiagnosticSnapshot($"line_count_{lines.Length}", null, 0);
+            return new HookDiagnosticSnapshot($"line_count_{lines.Length}", null, 0, null, null);
         }
 
         using var document = JsonDocument.Parse(lines[0]);
@@ -763,8 +774,31 @@ public sealed class HookCommandExecutionTests
             root.TryGetProperty("elapsedMs", out var elapsed)
                 && elapsed.ValueKind == JsonValueKind.Number
                     ? elapsed.GetInt64()
-                    : 0);
+                    : 0,
+            root.TryGetProperty("failureStage", out var failureStage)
+                ? failureStage.GetString()
+                : null,
+            root.TryGetProperty("exceptionType", out var exceptionType)
+                ? exceptionType.GetString()
+                : null);
     }
+
+    private static string CreateDesktopProcessFailureDiagnostic(
+        Uri endpoint,
+        DesktopProcessHarness desktop,
+        ProcessResult result,
+        HookDiagnosticSnapshot diagnostic) =>
+        $"Desktop Hook process failed. TargetHost={endpoint.Host}; TargetPort={endpoint.Port}; "
+        + $"EndpointPath={endpoint.AbsolutePath}; Protocol={endpoint.Scheme}; "
+        + $"DesktopAlive={!desktop.HasExited}; HookExitCode={result.ExitCode}; "
+        + $"HookElapsedMs={result.Elapsed.TotalMilliseconds:F0}; "
+        + $"HookStdout={SanitizeProcessText(result.StandardOutput)}; "
+        + $"HookStderr={SanitizeProcessText(result.StandardError)}; "
+        + $"ForwardResult={diagnostic.Result}; HttpStatus={diagnostic.HttpStatusCode?.ToString() ?? "none"}; "
+        + $"ForwardElapsedMs={diagnostic.ElapsedMilliseconds}; "
+        + $"FailureStage={diagnostic.FailureStage ?? "none"}; "
+        + $"ExceptionType={diagnostic.ExceptionType ?? "none"}; "
+        + $"TempPathHash={IdentifierHash.CreateFingerprint(Path.GetFullPath(desktop.WorkingDirectory))}.";
 
     private static string CreateAutomationFailureDiagnostic(
         string stage,
@@ -874,7 +908,9 @@ public sealed class HookCommandExecutionTests
     private sealed record HookDiagnosticSnapshot(
         string Result,
         int? HttpStatusCode,
-        long ElapsedMilliseconds);
+        long ElapsedMilliseconds,
+        string? FailureStage,
+        string? ExceptionType);
 
     private sealed class SignalingEventPublisher : IEventPublisher
     {

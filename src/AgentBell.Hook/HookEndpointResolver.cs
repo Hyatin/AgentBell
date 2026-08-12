@@ -15,6 +15,9 @@ public static class HookEndpointResolver
     /// <summary>Supplies a bounded connection timeout only to isolated test processes.</summary>
     public const string TestConnectTimeoutEnvironmentVariable = "AGENTBELL_TEST_CONNECT_TIMEOUT_MS";
 
+    /// <summary>Supplies the isolated Hook process hard deadline only to test processes.</summary>
+    public const string TestProcessTimeoutEnvironmentVariable = "AGENTBELL_TEST_PROCESS_TIMEOUT_MS";
+
     /// <summary>The immutable production ingestion endpoint.</summary>
     public static Uri ProductionEndpoint { get; } =
         new("http://127.0.0.1:17863/api/v1/events/codex");
@@ -59,6 +62,18 @@ public static class HookEndpointResolver
         => ResolveTestTimeout(
             TestConnectTimeoutEnvironmentVariable,
             maximumMilliseconds: 5_000,
+            environmentReader);
+
+    /// <summary>
+    /// Resolves a bounded outer process deadline only in explicit test mode. The
+    /// deadline is kept separate from the HTTP forwarding timeout so an isolated
+    /// test can preserve enough time for parsing and sanitized diagnostic flush.
+    /// </summary>
+    public static TimeSpan? ResolveTestProcessTimeout(
+        Func<string, string?>? environmentReader = null)
+        => ResolveTestTimeout(
+            TestProcessTimeoutEnvironmentVariable,
+            maximumMilliseconds: 15_000,
             environmentReader);
 
     private static TimeSpan? ResolveTestTimeout(

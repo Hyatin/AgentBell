@@ -107,6 +107,9 @@ public sealed class HookApplication
         var stopwatch = Stopwatch.StartNew();
         HookEventMetadata? eventMetadata = null;
         var result = ForwardResult.Failed(HookErrorCodes.UnexpectedError);
+        var stage = "input_resolution";
+        string? failureStage = null;
+        string? exceptionType = null;
 
         try
         {
@@ -136,6 +139,7 @@ public sealed class HookApplication
             }
 
             string? rawJson = null;
+            stage = "payload_parse";
 
             if (inputResult.Mode == HookInputMode.CodexPostToolUseHook)
             {
@@ -205,19 +209,27 @@ public sealed class HookApplication
 
             if (rawJson is not null)
             {
+                stage = "http_forward";
                 result = await _forwarder.ForwardAsync(
                     rawJson,
                     cancellationToken).ConfigureAwait(false);
             }
         }
-        catch
+        catch (Exception exception)
         {
-            result = ForwardResult.Failed(HookErrorCodes.UnexpectedError);
+            result = ForwardResult.Failed(ClassifyContainedFailure(stage, exception));
+            failureStage = stage;
+            exceptionType = exception.GetType().Name;
         }
         finally
         {
             stopwatch.Stop();
-            TryRecordDiagnostic(HookDiagnosticEvent.Create(eventMetadata, result, stopwatch.Elapsed));
+            TryRecordDiagnostic(HookDiagnosticEvent.Create(
+                eventMetadata,
+                result,
+                stopwatch.Elapsed,
+                failureStage,
+                exceptionType));
 
             if (isStopHookMode)
             {
@@ -252,6 +264,29 @@ public sealed class HookApplication
         {
             // Protocol output failures cannot be allowed to disrupt Codex.
         }
+    }
+
+    private static string ClassifyContainedFailure(string stage, Exception exception)
+    {
+        if (string.Equals(stage, "payload_parse", StringComparison.Ordinal))
+        {
+            return HookErrorCodes.InvalidJson;
+        }
+
+        if (string.Equals(stage, "http_forward", StringComparison.Ordinal))
+        {
+            if (exception is OperationCanceledException or TimeoutException)
+            {
+                return HookErrorCodes.ForwardTimeout;
+            }
+
+            if (exception is HttpRequestException)
+            {
+                return HookErrorCodes.ForwardUnavailable;
+            }
+        }
+
+        return HookErrorCodes.UnexpectedError;
     }
 
     private void TryRecordDiagnostic(HookDiagnosticEvent diagnosticEvent)
