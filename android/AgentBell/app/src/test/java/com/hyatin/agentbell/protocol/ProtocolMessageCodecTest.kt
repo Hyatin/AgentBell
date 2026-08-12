@@ -22,6 +22,39 @@ class ProtocolMessageCodecTest {
         assertEquals(8, event.sequence)
     }
 
+    @Test fun parsesActionRequiredFieldsWithoutSensitiveContent() {
+        val result = ProtocolMessageCodec.parseServerMessage(
+            """{"type":"event","payload":{"eventId":"codex-action:abcdef","agent":"codex","status":"action_required","title":"Codex action required","category":"action_required","actionType":"permission_required","toolCategory":"command","project":"AgentBell","summary":null,"threadIdHash":"abcdef123456","turnIdHash":"123456abcdef","toolUseIdHash":"fedcba654321","occurredAt":"2026-08-06T00:00:00Z","sequence":9,"resolvedAt":"2026-08-06T00:00:02Z","future":true}}""",
+        )
+        val event = ((result as ProtocolParseResult.Success).message as ServerMessage.Event).payload
+
+        assertEquals(AgentEventSemantics.CATEGORY_ACTION_REQUIRED, event.category)
+        assertEquals(AgentEventSemantics.ACTION_PERMISSION_REQUIRED, event.actionType)
+        assertEquals("command", event.toolCategory)
+        assertEquals("abcdef123456", event.threadIdHash)
+        assertEquals("123456abcdef", event.turnIdHash)
+        assertEquals("fedcba654321", event.toolUseIdHash)
+        assertEquals("2026-08-06T00:00:02Z", event.resolvedAt)
+        assertEquals(null, event.summary)
+    }
+
+    @Test fun oldCompletionEventDefaultsNewFieldsSafely() {
+        val result = ProtocolMessageCodec.parseServerMessage(eventJson(10, "done"))
+        val event = ((result as ProtocolParseResult.Success).message as ServerMessage.Event).payload
+
+        assertEquals(AgentEventSemantics.CATEGORY_COMPLETION, event.category)
+        assertEquals(AgentEventSemantics.ACTION_NONE, event.actionType)
+        assertEquals(AgentEventSemantics.TOOL_NONE, event.toolCategory)
+    }
+
+    @Test fun unknownActionTypeIsRejectedWithoutCrash() {
+        val result = ProtocolMessageCodec.parseServerMessage(
+            """{"type":"event","payload":{"eventId":"event","agent":"codex","status":"action_required","title":"safe","category":"action_required","actionType":"future_action","toolCategory":"other","occurredAt":"2026-08-06T00:00:00Z","sequence":1}}""",
+        )
+
+        assertEquals("invalid_event", (result as ProtocolParseResult.Invalid).code)
+    }
+
     @Test fun parsesPingAndCreatesExactPongMeaning() {
         val result = ProtocolMessageCodec.parseServerMessage("""{"type":"ping","timestamp":1234}""")
         assertEquals(1234, ((result as ProtocolParseResult.Success).message as ServerMessage.Ping).timestamp)

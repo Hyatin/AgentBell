@@ -16,6 +16,7 @@ public sealed class AgentBellRuntime : IAsyncDisposable
     private readonly IDesktopDiagnosticLogger _diagnosticLogger;
     private readonly LanAddressResolver _addressResolver;
     private readonly IPairingTokenProtector _tokenProtector;
+    private readonly DesktopNotificationSettingsState _notificationSettings = new();
 
     private WebApplication? _loopbackApplication;
     private WebSocketConnectionManager? _connectionManager;
@@ -61,7 +62,8 @@ public sealed class AgentBellRuntime : IAsyncDisposable
             var application = DesktopHost.Build(
                 _runtimeOptions,
                 eventPublisher,
-                _diagnosticLogger);
+                _diagnosticLogger,
+                _notificationSettings);
             try
             {
                 await DesktopHost.InitializeAsync(application, cancellationToken).ConfigureAwait(false);
@@ -152,6 +154,8 @@ public sealed class AgentBellRuntime : IAsyncDisposable
             LatestSequence = history?.LatestSequence ?? 0,
             EventCount = history?.EventCount ?? 0,
             LastEventTime = latest?.OccurredAt,
+            RecentEvents = history?.Events ?? [],
+            NotificationSettings = _notificationSettings.Current,
             PairingQrCodePath = _runtimeOptions.PairingQrCodePath,
             PairingQrAvailable = _lanServer?.QrCodeWritten == true
                 && !string.IsNullOrWhiteSpace(_runtimeOptions.PairingQrCodePath)
@@ -221,6 +225,63 @@ public sealed class AgentBellRuntime : IAsyncDisposable
         }
     }
 
+    /// <summary>Persists and atomically applies local Windows notification settings.</summary>
+    public async Task<bool> UpdateNotificationSettingsAsync(
+        DesktopNotificationSettings settings,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            bool saved;
+            if (_pairing is not null)
+            {
+                saved = await _pairing.UpdateNotificationSettingsAsync(settings, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else if (!string.IsNullOrWhiteSpace(_runtimeOptions.ConfigFilePath))
+            {
+                var store = new AgentBellConfigStore(_runtimeOptions.ConfigFilePath);
+                var load = await store.LoadAsync(cancellationToken).ConfigureAwait(false);
+                saved = load.PersistenceSucceeded
+                    && load.Configuration is not null
+                    && await store.SaveAsync(
+                        load.Configuration with
+                        {
+                            NotifyTaskCompletion = settings.NotifyTaskCompletion,
+                            NotifyActionRequired = settings.NotifyActionRequired,
+                            PermissionNotificationPolicy =
+                                PermissionNotificationPolicyValues.ToPersistedValue(
+                                    settings.PermissionNotificationPolicy),
+                            LegacyNotifyPermissionRequests = null,
+                            NotifyReplyAndConfirmationRequests =
+                                settings.NotifyReplyAndConfirmationRequests,
+                            DetectQuestionsInCompletedResponses =
+                                settings.DetectQuestionsInCompletedResponses,
+                            UpdatedAt = DateTimeOffset.UtcNow,
+                        },
+                        cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                saved = false;
+            }
+
+            if (saved)
+            {
+                _notificationSettings.Update(settings);
+            }
+
+            return saved;
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
     /// <summary>Gets the current token only for in-process sensitive-data scanning.</summary>
     internal string? GetSensitivePairingTokenForScan() => _pairing?.Token.Value;
 
@@ -260,6 +321,8 @@ public sealed class AgentBellRuntime : IAsyncDisposable
                 SetLanUnavailable(configuration.ResultCode);
                 return;
             }
+
+            _notificationSettings.Update(_pairing.GetNotificationSettings());
 
             var address = _runtimeOptions.LanAddressOverride
                 ?? _addressResolver.ResolveCurrent();

@@ -59,6 +59,9 @@ public sealed class InstallerSourceTests
             source,
             StringComparison.Ordinal);
         Assert.DoesNotContain("RaiseException('Codex 集成失败", source, StringComparison.Ordinal);
+        Assert.Contains("Stop, PermissionRequest, and PostToolUse Hooks", source, StringComparison.Ordinal);
+        Assert.Contains("Stop、PermissionRequest 和 PostToolUse Hook", source, StringComparison.Ordinal);
+        Assert.Contains("never bypasses or confirms Hook trust prompts", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -157,6 +160,8 @@ public sealed class InstallerSourceTests
         Assert.Contains("'/LANG=zhcn'", source, StringComparison.Ordinal);
         Assert.Contains("stored-language uninstall", source, StringComparison.Ordinal);
         Assert.Contains("Assert-OnlyOtherHookRemains -HooksPath $chineseHooksPath", source);
+        Assert.Contains("'PermissionRequest'", source, StringComparison.Ordinal);
+        Assert.Contains("--codex-permission-request-hook", source, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

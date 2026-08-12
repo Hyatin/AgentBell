@@ -174,6 +174,12 @@ class AgentBellWebSocketClient(
                         sequence = message.payload.sequence,
                         deduplicated = true,
                     )
+                    is EventProcessResult.Suppressed -> record(
+                        messageType = "event",
+                        sequence = message.payload.sequence,
+                        notificationPosted = false,
+                        protocolErrorCode = "permission_notification_off",
+                    )
                     is EventProcessResult.Invalid -> record(
                         messageType = "event",
                         protocolErrorCode = result.code,

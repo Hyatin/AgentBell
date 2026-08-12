@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace AgentBell.Integration;
 
-/// <summary>Safely inspects and mutates only AgentBell's user-level Codex Stop Hook.</summary>
+/// <summary>Safely inspects and mutates only AgentBell's managed Codex command Hooks.</summary>
 public sealed partial class HooksJsonManager
 {
     private const long MaximumHooksFileBytes = 4L * 1024 * 1024;
@@ -173,19 +173,15 @@ public sealed partial class HooksJsonManager
                 };
             }
 
-            RemoveCandidate(root, analysis.Candidates[0]);
-            CleanupAgentBellEmptyContainers(root, analysis.Candidates[0]);
-        }
-        else if (analysis.Candidates.Count == 0)
-        {
-            AddAgentBellHandler(root, commands);
-            trustReviewRequired = true;
+            foreach (var candidate in analysis.Candidates)
+            {
+                RemoveCandidate(root, candidate);
+                CleanupAgentBellEmptyContainers(root, candidate);
+            }
         }
         else
         {
-            RepairHandler(analysis.Candidates[0].Handler, commands);
-            trustReviewRequired = state != CodexIntegrationState.Installed;
-            if (!trustReviewRequired)
+            if (state == CodexIntegrationState.Installed)
             {
                 return Result(
                     true,
@@ -193,8 +189,24 @@ public sealed partial class HooksJsonManager
                     CodexIntegrationState.Installed,
                     "installed",
                     path,
-                    1);
+                    commands.All.Count);
             }
+
+            foreach (var definition in commands.All)
+            {
+                var candidate = analysis.Candidates.SingleOrDefault(
+                    item => item.HookType == definition.EventName);
+                if (candidate is null)
+                {
+                    AddAgentBellHandler(root, definition);
+                }
+                else
+                {
+                    RepairHandler(candidate.Handler, definition);
+                }
+            }
+
+            trustReviewRequired = true;
         }
 
         var write = await WriteAsync(
@@ -245,7 +257,7 @@ public sealed partial class HooksJsonManager
             HooksPath = path,
             BackupPath = write.BackupPath,
             TemporaryPath = write.TemporaryPath,
-            AgentBellHookCount = operation == HooksOperation.Uninstall ? 0 : 1,
+            AgentBellHookCount = operation == HooksOperation.Uninstall ? 0 : commands.All.Count,
             AgentBellHookCountBefore = analysis.Candidates.Count,
             TrustReviewRequired = trustReviewRequired,
             Stage = write.Stage,
@@ -267,62 +279,80 @@ public sealed partial class HooksJsonManager
             return new HooksAnalysis(false, []);
         }
 
-        if (!hooksObject.TryGetPropertyValue("Stop", out var stopNode) || stopNode is null)
-        {
-            return new HooksAnalysis(true, []);
-        }
-
-        if (stopNode is not JsonArray stopGroups)
-        {
-            return new HooksAnalysis(false, []);
-        }
-
         var candidates = new List<HookCandidate>();
-        foreach (var groupNode in stopGroups)
+        foreach (var eventProperty in hooksObject)
         {
-            if (groupNode is not JsonObject group)
+            if (eventProperty.Value is null)
             {
                 continue;
             }
 
-            if (!group.TryGetPropertyValue("hooks", out var handlersNode)
-                || handlersNode is not JsonArray handlers)
+            if (eventProperty.Value is not JsonArray groups)
             {
-                continue;
+                return new HooksAnalysis(false, []);
             }
 
-            foreach (var handlerNode in handlers)
+            foreach (var groupNode in groups)
             {
-                if (handlerNode is not JsonObject handler
-                    || !string.Equals(
-                        handler["type"]?.GetValue<string>(),
-                        "command",
-                        StringComparison.Ordinal))
+                if (groupNode is not JsonObject group)
                 {
                     continue;
                 }
 
-                var command = GetString(handler, "command");
-                var commandWindows = GetString(handler, "commandWindows");
-                if (!LooksLikeAgentBell(command) && !LooksLikeAgentBell(commandWindows))
+                if (!group.TryGetPropertyValue("hooks", out var handlersNode)
+                    || handlersNode is not JsonArray handlers)
                 {
                     continue;
                 }
 
-                var paths = new[] { command, commandWindows }
-                    .Select(TryExtractHookPath)
-                    .Where(candidate => candidate is not null)
-                    .Cast<string>()
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-                var kind = paths.Length == 1
-                    ? ClassifyPath(paths[0], commands.HookExecutablePath)
-                    : CandidateKind.Other;
-                var exact = kind == CandidateKind.Current
-                    && string.Equals(command, commands.Command, StringComparison.Ordinal)
-                    && string.Equals(commandWindows, commands.CommandWindows, StringComparison.Ordinal)
-                    && handler["timeout"]?.GetValue<int>() == 3;
-                candidates.Add(new HookCandidate(group, handlers, handler, kind, exact));
+                foreach (var handlerNode in handlers)
+                {
+                    if (handlerNode is not JsonObject handler
+                        || !string.Equals(
+                            GetString(handler, "type"),
+                            "command",
+                            StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var command = GetString(handler, "command");
+                    var commandWindows = GetString(handler, "commandWindows");
+                    if (!LooksLikeAgentBell(command) && !LooksLikeAgentBell(commandWindows))
+                    {
+                        continue;
+                    }
+
+                    var paths = new[] { command, commandWindows }
+                        .Select(TryExtractHookPath)
+                        .Where(candidate => candidate is not null)
+                        .Cast<string>()
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    var kind = paths.Length == 1
+                        ? ClassifyPath(paths[0], commands.HookExecutablePath)
+                        : CandidateKind.Other;
+                    var hookType = IdentifyHookType(command, commandWindows);
+                    var definition = commands.All.SingleOrDefault(
+                        item => item.EventName == hookType);
+                    var exact = kind == CandidateKind.Current
+                        && definition is not null
+                        && eventProperty.Key == definition.EventName
+                        && string.Equals(command, definition.Command, StringComparison.Ordinal)
+                        && string.Equals(
+                            commandWindows,
+                            definition.CommandWindows,
+                            StringComparison.Ordinal)
+                        && handler["timeout"]?.GetValue<int>() == 3;
+                    candidates.Add(new HookCandidate(
+                        eventProperty.Key,
+                        group,
+                        handlers,
+                        handler,
+                        hookType,
+                        kind,
+                        exact));
+                }
             }
         }
 
@@ -333,23 +363,31 @@ public sealed partial class HooksJsonManager
         IReadOnlyList<HookCandidate> candidates,
         HookCommands commands)
     {
-        _ = commands;
+        if (candidates.Any(item => item.Kind == CandidateKind.Other || item.HookType is null)
+            || candidates.GroupBy(item => item.HookType).Any(group => group.Count() > 1)
+            || candidates.Any(item => item.EventName != item.HookType))
+        {
+            return CodexIntegrationState.NeedsManualReview;
+        }
+
         if (candidates.Count == 0)
         {
             return CodexIntegrationState.Missing;
         }
 
-        if (candidates.Count > 1 || candidates[0].Kind == CandidateKind.Other)
+        if (commands.All.All(definition =>
+                candidates.Any(candidate =>
+                    candidate.HookType == definition.EventName && candidate.IsExact)))
         {
-            return CodexIntegrationState.NeedsManualReview;
+            return CodexIntegrationState.Installed;
         }
 
-        return candidates[0].Kind == CandidateKind.Current && candidates[0].IsExact
-            ? CodexIntegrationState.Installed
-            : CodexIntegrationState.NeedsRepair;
+        return CodexIntegrationState.NeedsRepair;
     }
 
-    private static void AddAgentBellHandler(JsonObject root, HookCommands commands)
+    private static void AddAgentBellHandler(
+        JsonObject root,
+        HookCommandDefinition definition)
     {
         var hooks = root["hooks"] as JsonObject;
         if (hooks is null)
@@ -358,36 +396,38 @@ public sealed partial class HooksJsonManager
             root["hooks"] = hooks;
         }
 
-        var stop = hooks["Stop"] as JsonArray;
-        if (stop is null)
+        var groups = hooks[definition.EventName] as JsonArray;
+        if (groups is null)
         {
-            stop = [];
-            hooks["Stop"] = stop;
+            groups = [];
+            hooks[definition.EventName] = groups;
         }
 
-        stop.Add(new JsonObject
+        groups.Add(new JsonObject
         {
-            ["hooks"] = new JsonArray(CreateHandler(commands)),
+            ["hooks"] = new JsonArray(CreateHandler(definition)),
         });
     }
 
-    private static JsonObject CreateHandler(HookCommands commands) =>
+    private static JsonObject CreateHandler(HookCommandDefinition definition) =>
         new()
         {
             ["type"] = "command",
-            ["command"] = commands.Command,
-            ["commandWindows"] = commands.CommandWindows,
+            ["command"] = definition.Command,
+            ["commandWindows"] = definition.CommandWindows,
             ["timeout"] = 3,
-            ["statusMessage"] = "Sending completion to AgentBell",
+            ["statusMessage"] = definition.StatusMessage,
         };
 
-    private static void RepairHandler(JsonObject handler, HookCommands commands)
+    private static void RepairHandler(
+        JsonObject handler,
+        HookCommandDefinition definition)
     {
         handler["type"] = "command";
-        handler["command"] = commands.Command;
-        handler["commandWindows"] = commands.CommandWindows;
+        handler["command"] = definition.Command;
+        handler["commandWindows"] = definition.CommandWindows;
         handler["timeout"] = 3;
-        handler["statusMessage"] = "Sending completion to AgentBell";
+        handler["statusMessage"] = definition.StatusMessage;
     }
 
     private static void RemoveCandidate(JsonObject root, HookCandidate candidate)
@@ -399,19 +439,19 @@ public sealed partial class HooksJsonManager
     private static void CleanupAgentBellEmptyContainers(JsonObject root, HookCandidate candidate)
     {
         if (root["hooks"] is not JsonObject hooks
-            || hooks["Stop"] is not JsonArray stop)
+            || hooks[candidate.EventName] is not JsonArray groups)
         {
             return;
         }
 
         if (candidate.Handlers.Count == 0 && candidate.Group.Count == 1)
         {
-            stop.Remove(candidate.Group);
+            groups.Remove(candidate.Group);
         }
 
-        if (stop.Count == 0)
+        if (groups.Count == 0)
         {
-            hooks.Remove("Stop");
+            hooks.Remove(candidate.EventName);
         }
 
         if (hooks.Count == 0)
@@ -655,7 +695,7 @@ public sealed partial class HooksJsonManager
 
         return operation == HooksOperation.Uninstall
             ? analysis.Candidates.Count == 0
-            : analysis.Candidates.Count == 1
+            : analysis.Candidates.Count == commands.All.Count
                 && DetermineState(analysis.Candidates, commands) == CodexIntegrationState.Installed;
     }
 
@@ -798,7 +838,22 @@ public sealed partial class HooksJsonManager
     private static bool LooksLikeAgentBell(string? command) =>
         !string.IsNullOrWhiteSpace(command)
         && command.Contains("AgentBell.Hook.exe", StringComparison.OrdinalIgnoreCase)
-        && StopOptionRegex().IsMatch(command);
+        && ManagedOptionRegex().IsMatch(command);
+
+    private static string? IdentifyHookType(string? command, string? commandWindows)
+    {
+        var combined = $"{command}\n{commandWindows}";
+        var isStop = StopOptionRegex().IsMatch(combined);
+        var isPermission = PermissionOptionRegex().IsMatch(combined);
+        var isPostToolUse = PostToolUseOptionRegex().IsMatch(combined);
+        return (isStop, isPermission, isPostToolUse) switch
+        {
+            (true, false, false) => "Stop",
+            (false, true, false) => "PermissionRequest",
+            (false, false, true) => "PostToolUse",
+            _ => null,
+        };
+    }
 
     private static string? TryExtractHookPath(string? command)
     {
@@ -869,6 +924,21 @@ public sealed partial class HooksJsonManager
     private static partial Regex StopOptionRegex();
 
     [GeneratedRegex(
+        "(?:^|\\s)--codex-permission-request-hook(?:\\s|\"|$)",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex PermissionOptionRegex();
+
+    [GeneratedRegex(
+        "(?:^|\\s)--codex-post-tool-use-hook(?:\\s|\"|$)",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex PostToolUseOptionRegex();
+
+    [GeneratedRegex(
+        "(?:^|\\s)--codex-(?:stop|permission-request|post-tool-use)-hook(?:\\s|\"|$)",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex ManagedOptionRegex();
+
+    [GeneratedRegex(
         "(?:\\\"(?<quoted>[^\\\"]*AgentBell\\.Hook\\.exe)\\\"|(?<plain>(?:[A-Za-z]:\\\\|\\\\\\\\)[^\\s\\\"]*AgentBell\\.Hook\\.exe))",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex HookPathRegex();
@@ -889,9 +959,11 @@ public sealed partial class HooksJsonManager
     }
 
     private sealed record HookCandidate(
+        string EventName,
         JsonObject Group,
         JsonArray Handlers,
         JsonObject Handler,
+        string? HookType,
         CandidateKind Kind,
         bool IsExact);
 

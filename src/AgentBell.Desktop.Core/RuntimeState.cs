@@ -1,5 +1,7 @@
 namespace AgentBell.Desktop;
 
+using AgentBell.Contracts;
+
 /// <summary>Describes one public, content-free runtime service state.</summary>
 public enum RuntimeServiceStatus
 {
@@ -51,6 +53,12 @@ public sealed record AgentBellRuntimeSnapshot
 
     /// <summary>Gets the last sanitized event time.</summary>
     public DateTimeOffset? LastEventTime { get; init; }
+
+    /// <summary>Gets the sanitized recent events in ascending sequence order.</summary>
+    public IReadOnlyList<AgentEvent> RecentEvents { get; init; } = [];
+
+    /// <summary>Gets current local Windows notification settings.</summary>
+    public DesktopNotificationSettings NotificationSettings { get; init; } = new();
 
     /// <summary>Gets the pairing QR path, which never contains the token itself.</summary>
     public string? PairingQrCodePath { get; init; }

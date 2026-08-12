@@ -17,16 +17,21 @@ try
         new HookInputResolver(),
         new CodexPayloadParser(),
         new CodexStopHookPayloadParser(),
+        new CodexPermissionRequestPayloadParser(),
+        new PermissionRequestSanitizer(),
+        new CodexPostToolUsePayloadParser(),
+        new PostToolUseSanitizer(),
         new HttpEventForwarder(
             httpClient,
             HookEndpointResolver.ResolveTestForwardTimeout()),
         DiagnosticLoggerFactory.CreateFromEnvironment());
 
+    using var hardTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
     return await application.RunAsync(
         args,
         Console.OpenStandardInput(),
         Console.Out,
-        CancellationToken.None).ConfigureAwait(false);
+        hardTimeout.Token).ConfigureAwait(false);
 }
 catch
 {

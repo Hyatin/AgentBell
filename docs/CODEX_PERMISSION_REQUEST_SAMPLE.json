@@ -1,0 +1,13 @@
+{
+  "session_id": "<REDACTED>",
+  "turn_id": "<REDACTED>",
+  "cwd": "<REPOSITORY_ROOT>\\AgentBell",
+  "hook_event_name": "PermissionRequest",
+  "permission_mode": "ask",
+  "tool_name": "Bash",
+  "tool_use_id": "<REDACTED>",
+  "tool_input": {
+    "command": "<REDACTED>",
+    "description": "<REDACTED>"
+  }
+}

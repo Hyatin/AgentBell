@@ -22,7 +22,9 @@ public sealed class CodexEventTransformerTests
 
         Assert.Equal("codex", result.Agent);
         Assert.Equal("completed", result.Status);
-        Assert.Equal("Codex 已完成当前回合", result.Title);
+        Assert.Equal("Codex turn completed", result.Title);
+        Assert.Equal(AgentEventCategories.Completion, result.Category);
+        Assert.Equal(AgentActionTypes.None, result.ActionType);
         Assert.Equal("AgentBell", result.Project);
         Assert.Equal("完成第一行 第二行 🔔", result.Summary);
         Assert.Equal("791be4077488", result.ThreadIdHash);

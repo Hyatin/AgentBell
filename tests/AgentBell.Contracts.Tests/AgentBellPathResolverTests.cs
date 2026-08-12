@@ -26,7 +26,7 @@ public sealed class AgentBellPathResolverTests
                 "Programs",
                 "AgentBell",
                 "android",
-                "AgentBell-Android-0.6.0-beta.1.apk"),
+                "AgentBell-Android-0.7.0-beta.1.apk"),
             resolver.AndroidApkPath);
         Assert.Equal(
             Path.Combine(knownFolder, "Programs", "AgentBell", "AgentBell.Tray.exe"),
@@ -63,8 +63,8 @@ public sealed class AgentBellPathResolverTests
     [Fact]
     public void ProductMetadata_IsCentralizedForBeta()
     {
-        Assert.Equal("0.6.0", AgentBellProduct.ProductVersion);
-        Assert.Equal("0.6.0-beta.1", AgentBellProduct.InformationalVersion);
+        Assert.Equal("0.7.0", AgentBellProduct.ProductVersion);
+        Assert.Equal("0.7.0-beta.1", AgentBellProduct.InformationalVersion);
         Assert.Equal(1, AgentBellProtocol.ProtocolVersion);
     }
 

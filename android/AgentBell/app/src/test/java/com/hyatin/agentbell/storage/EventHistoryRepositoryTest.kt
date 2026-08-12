@@ -3,6 +3,7 @@ package com.hyatin.agentbell.storage
 import com.hyatin.agentbell.InMemoryEventStateStorage
 import com.hyatin.agentbell.InMemoryPairingCredentialStore
 import com.hyatin.agentbell.testEvent
+import com.hyatin.agentbell.protocol.AgentEventSemantics
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
@@ -12,6 +13,31 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EventHistoryRepositoryTest {
+    @Test fun permissionEventIsSuppressedFromHistoryButAdvancesResumeWatermarkWhenPolicyIsOff() =
+        runTest {
+            val storage = InMemoryEventStateStorage()
+            val repository = EventHistoryRepository(
+                storage,
+                InMemoryPairingCredentialStore(),
+            ) { event -> event.actionType != AgentEventSemantics.ACTION_PERMISSION_REQUIRED }
+            repository.initialize()
+            val permission = testEvent("permission", 4).copy(
+                status = "action_required",
+                category = AgentEventSemantics.CATEGORY_ACTION_REQUIRED,
+                actionType = AgentEventSemantics.ACTION_PERMISSION_REQUIRED,
+                toolCategory = "command",
+            )
+
+            val result = repository.process(permission)
+
+            assertTrue(result is EventProcessResult.Suppressed)
+            assertTrue(repository.events.value.isEmpty())
+            assertTrue(storage.state.recentEvents.isEmpty())
+            assertEquals(listOf("permission"), storage.state.recentEventIds)
+            assertEquals(4, repository.lastSequence())
+            assertTrue(repository.process(permission) is EventProcessResult.Duplicate)
+        }
+
     @Test fun newEventIsStoredAndUpdatesSequence() = runTest {
         val eventStorage = InMemoryEventStateStorage()
         val credentialStore = InMemoryPairingCredentialStore()
@@ -90,5 +116,32 @@ class EventHistoryRepositoryTest {
         }.awaitAll()
         assertEquals(1, results.count { it is EventProcessResult.Accepted })
         assertEquals(29, results.count { it is EventProcessResult.Duplicate })
+    }
+
+    @Test fun resolvedUpdateReplacesPublishedPermissionAndAdvancesWatermark() = runTest {
+        val storage = InMemoryEventStateStorage()
+        val pairing = InMemoryPairingCredentialStore()
+        val repository = EventHistoryRepository(storage, pairing)
+        repository.initialize()
+        val permission = testEvent("permission", 4).copy(
+            status = "action_required",
+            category = "action_required",
+            actionType = "permission_required",
+            toolCategory = "command",
+            toolUseIdHash = "abcdef123456",
+        )
+
+        assertTrue(repository.process(permission) is EventProcessResult.Accepted)
+        val resolved = permission.copy(
+            sequence = 5,
+            resolvedAt = "2026-08-06T00:00:02Z",
+        )
+        assertTrue(repository.process(resolved) is EventProcessResult.Accepted)
+
+        assertEquals(1, repository.events.value.size)
+        assertEquals("2026-08-06T00:00:02Z", repository.events.value.single().resolvedAt)
+        assertEquals(5, repository.lastSequence())
+        assertEquals(5, storage.state.lastSequence)
+        assertTrue(repository.process(resolved) is EventProcessResult.Duplicate)
     }
 }

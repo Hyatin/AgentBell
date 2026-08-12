@@ -15,6 +15,14 @@
 > `config.toml` 修改或 notify chaining 为主要集成方式的旧描述；这些旧描述不得用于
 > 当前或后续实现，直至规格被正式重构。非托管 Hook 仍须由用户审核和信任。
 
+> **M6 操作请求通知修订（2026-08-07）**：`0.7.0-beta.1` 在现有 Stop Hook
+> 之外增加用户级 `PermissionRequest` 与 `PostToolUse` command Hook，并以向后兼容的协议 v1
+> 增量字段支持 `completion` 与 `action_required`。此修订只发送通知，不支持
+> 远程批准、远程回复、自动 allow/deny、权限策略变更或 Hook trust 绕过。
+> Codex Hook 当前不会暴露 PermissionRequest 是由 Auto-review 自动处理，还是正在
+> 等待用户批准。权限请求提醒因此改为显式的 `关闭` / `始终提醒` 策略，默认关闭；
+> 不得再使用超时或 PostToolUse 到达时间推断审批者。
+
 ---
 
 ## 1. 项目定义
@@ -1433,3 +1441,107 @@ M0 诊断日志允许记录：
 - 第一轮不做 Claude。
 - 第一轮不做正式 Hooks 插件。
 - 先完成 M0，再逐步推进，禁止跨里程碑扩张。
+
+---
+
+## 27. M6：Codex Action Required Notifications
+
+M6 目标版本为 `0.7.0-beta.1`，Android `versionCode` 为 7，协议版本保持 1。
+
+### 27.1 事件来源
+
+- `AgentBell.Hook.exe --codex-stop-hook` 保持既有 stdin 与
+  `{"continue":true}` stdout 契约。
+- `AgentBell.Hook.exe --codex-permission-request-hook` 从 stdin 接收官方
+  `PermissionRequest` JSON；所有结果均 exit 0，stdout/stderr 均为空，不返回
+  `allow`、`deny` 或 `updatedInput`，硬超时不超过 3 秒。
+- `AgentBell.Hook.exe --codex-post-tool-use-hook` 从 stdin 接收官方
+  `PostToolUse` JSON；只转发 session/turn/tool-use 的确定性截断哈希和工具类别，
+  不保存 `tool_input`、`tool_response` 或命令。所有结果均 exit 0 且
+  stdout/stderr 为空。
+- 当前官方 Hooks schema 明确支持 `PostToolUse`。其安全关联字段为
+  `session_id`、`turn_id`、`tool_use_id` 和 `tool_name`；PermissionRequest 的
+  官方字段不保证包含 `tool_use_id`，缺失时仅在相同 session、turn 和工具类别内
+  使用最早生命周期项进行保守关联。该关联只用于去重、清理与未来兼容，不用于
+  判断请求是否曾等待用户。
+- 未观察到稳定的结构化 user-input `tool_name` 时，不得安装猜测的
+  PreToolUse matcher。回复和确认请求使用本机 Stop 高置信度分类作为回退。
+
+### 27.2 事件语义
+
+协议 v1 增量字段：
+
+- `category`: `completion` 或 `action_required`；
+- `actionType`: `none`、`permission_required`、`input_required`、
+  `confirmation_required`、`attention_required`；
+- `toolCategory`: `none`、`command`、`file_change`、`network_access`、
+  `external_tool`、`computer_control`、`other`。
+
+PermissionRequest 在 Hook 进程内先清理，再发送到 Desktop。Desktop 对唯一 EventId
+维护有界、线程安全的脱敏生命周期。策略为 `关闭` 时仅记录可选脱敏诊断并参与
+进程内去重，不写入 `events.json`，不进入 Windows/Android 操作历史，不弹通知，
+也不通过 WebSocket 广播。策略为 `始终提醒` 时，每个唯一请求立即生成一个
+`category=action_required`、`actionType=permission_required` 事件，持久化并分别交给
+Windows 与 Android；不存在 grace period、等待计时器或“超时即需人工处理”的语义。
+
+PostToolUse 优先以 tool-use 哈希关联对应生命周期项；Stop 关联同一 session/turn 的
+全部权限项。已发布项可使用同一 EventId 和更高 Sequence 写入 `resolvedAt` 更新，
+供客户端清除活动通知；仅观察项不生成用户事件。PostToolUse 的出现时间、延迟或
+缺失均不得用于推断 Auto-review、人工审批或真实等待状态。
+
+### 27.3 隐私边界
+
+LAN 与 Android 不得接收 raw Hook JSON、command、tool input/response、
+description、prompt、用户问题、`last_assistant_message`、完整 cwd、原始 ID、
+transcript 或 Token。只允许稳定枚举、project basename、不可逆截断哈希、
+event ID、sequence 和时间。Windows/Android 通知只显示本地化通用文案与
+project basename。
+
+### 27.4 本地分类
+
+Stop 文本分类只匹配明确多词短语，优先级为 permission、input、confirmation、
+attention、completion。不得以问号或“确认”“需要”等单词单独判断。无法高
+置信度分类时必须作为 completion。分类后 action-required 事件不保存摘要；
+诊断最多记录 `classifiedAs`、规则 ID 与置信度，不记录命中文本。
+
+### 27.5 展示与设置
+
+Windows 与 Android 分别保存完成通知、一般需要操作、回复与确认等现有显示设置。
+权限请求使用独立策略：`关闭`（默认）或 `始终提醒`。一般“需要操作”开关只控制
+input/confirmation/attention，不控制 permission。旧版 `notifyPermissionRequests`
+布尔值（包括 `true`）必须安全迁移为 `关闭`，防止升级后继续误提醒。
+
+设置页必须明确说明：Codex 不会向 Hook 暴露权限请求由 Auto-review 自动处理还是
+等待用户批准，因此“始终提醒”也可能提醒最终由 Codex 自动处理的请求。不得提供
+Auto、Smart 等暗示可精确判断的选项。
+
+Android 保留 completion channel，并增加
+`agentbell_action_required`（High importance、声音、震动；无 full-screen
+intent，不绕过勿扰）。所有新增文本必须保持英文/简体中文 key 与占位符一致。
+
+### 27.6 安装与卸载
+
+Setup 在 `hooks.json` 中维护恰好一个 Stop、一个 PermissionRequest 和一个
+PostToolUse AgentBell Hook，写入前备份，保留全部非 AgentBell Hook，不修改 `config.toml`、`notify`
+或权限策略。定义更新后由 Codex 正常发起 Review/Trust。歧义时停止自动修改。
+卸载只删除严格识别的三个 AgentBell Hook。
+
+人工验收步骤和模拟输入边界见 `docs/M6_MANUAL_TEST.md`。模拟
+PermissionRequest 不能宣称为真实 Codex 权限弹窗验收；自然语言分类不能宣称
+百分之百准确。
+
+### 27.7 能力边界调查结论
+
+Codex App Server 协议存在比 Hooks 更精确的审批信号，包括：
+
+- `item/commandExecution/requestApproval`；
+- `item/fileChange/requestApproval`；
+- `item/permissions/requestApproval`；
+- `thread/status/changed` 的 `waitingOnApproval`；
+- `serverRequest/resolved`。
+
+这些信号不在当前 command Hook 输入中。另起一个 App Server 客户端也不能观察
+Windows Codex Desktop 已建立的私有连接，因此 M6 不接管或代理 Desktop 的 App
+Server 会话。禁止以 OCR、UI 自动化、进程注入、私有连接接管、SQLite 抓取或未文档化
+`approvalsReviewer` 作为产品实现；`approvalsReviewer` 只保留为能力调查事实，不构成
+受支持契约。

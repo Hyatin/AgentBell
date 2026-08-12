@@ -146,21 +146,42 @@ function Get-AgentBellHandlers {
     param([Parameter(Mandatory = $true)]$Root)
 
     $handlers = @()
-    foreach ($group in @($Root.hooks.Stop)) {
-        foreach ($handler in @($group.hooks)) {
-            $commandProperty = $handler.PSObject.Properties['command']
-            $commandWindowsProperty = $handler.PSObject.Properties['commandWindows']
-            $command = if ($null -eq $commandProperty) { '' } else { [string]$commandProperty.Value }
-            $commandWindows = if ($null -eq $commandWindowsProperty) {
-                ''
-            }
-            else {
-                [string]$commandWindowsProperty.Value
-            }
-            $combined = $command + ' ' + $commandWindows
-            if ($combined.Contains('AgentBell.Hook.exe', [StringComparison]::OrdinalIgnoreCase) -and
-                $combined.Contains('--codex-stop-hook', [StringComparison]::Ordinal)) {
-                $handlers += $handler
+    $definitions = @(
+        [pscustomobject]@{ EventName = 'Stop'; Option = '--codex-stop-hook' },
+        [pscustomobject]@{
+            EventName = 'PermissionRequest'
+            Option = '--codex-permission-request-hook'
+        },
+        [pscustomobject]@{
+            EventName = 'PostToolUse'
+            Option = '--codex-post-tool-use-hook'
+        }
+    )
+    foreach ($definition in $definitions) {
+        $eventProperty = $Root.hooks.PSObject.Properties[$definition.EventName]
+        if ($null -eq $eventProperty) {
+            continue
+        }
+        foreach ($group in @($eventProperty.Value)) {
+            foreach ($handler in @($group.hooks)) {
+                $commandProperty = $handler.PSObject.Properties['command']
+                $commandWindowsProperty = $handler.PSObject.Properties['commandWindows']
+                $command = if ($null -eq $commandProperty) { '' } else { [string]$commandProperty.Value }
+                $commandWindows = if ($null -eq $commandWindowsProperty) {
+                    ''
+                }
+                else {
+                    [string]$commandWindowsProperty.Value
+                }
+                $combined = $command + ' ' + $commandWindows
+                if ($combined.Contains('AgentBell.Hook.exe', [StringComparison]::OrdinalIgnoreCase) -and
+                    $combined.Contains($definition.Option, [StringComparison]::Ordinal)) {
+                    $handlers += [pscustomobject]@{
+                        EventName = $definition.EventName
+                        Option = $definition.Option
+                        Handler = $handler
+                    }
+                }
             }
         }
     }
@@ -176,16 +197,34 @@ function Assert-HooksDocument {
 
     $root = Get-Content -Raw -LiteralPath $HooksPath | ConvertFrom-Json
     $agentBellHandlers = @(Get-AgentBellHandlers -Root $root)
-    if ($agentBellHandlers.Count -ne 1) {
-        throw "Expected exactly one AgentBell Stop Hook; found $($agentBellHandlers.Count)."
+    if ($agentBellHandlers.Count -ne 3) {
+        throw "Expected one Stop, one PermissionRequest, and one PostToolUse Hook; found $($agentBellHandlers.Count)."
     }
 
-    $expectedDirect = '"' + [System.IO.Path]::GetFullPath($ExpectedHookPath) + '" --codex-stop-hook'
-    $expectedWindows = 'cmd.exe /d /s /c "' + $expectedDirect + '"'
-    if ([string]$agentBellHandlers[0].command -cne $expectedDirect -or
-        [string]$agentBellHandlers[0].commandWindows -cne $expectedWindows -or
-        [int]$agentBellHandlers[0].timeout -ne 3) {
-        throw 'The managed AgentBell handler does not contain the exact stable command contract.'
+    foreach ($definition in @(
+        [pscustomobject]@{ EventName = 'Stop'; Option = '--codex-stop-hook' },
+        [pscustomobject]@{
+            EventName = 'PermissionRequest'
+            Option = '--codex-permission-request-hook'
+        },
+        [pscustomobject]@{
+            EventName = 'PostToolUse'
+            Option = '--codex-post-tool-use-hook'
+        }
+    )) {
+        $match = @($agentBellHandlers | Where-Object EventName -CEQ $definition.EventName)
+        if ($match.Count -ne 1) {
+            throw "The $($definition.EventName) Hook is not unique."
+        }
+        $handler = $match[0].Handler
+        $expectedDirect = '"' + [System.IO.Path]::GetFullPath($ExpectedHookPath) + '" ' +
+            $definition.Option
+        $expectedWindows = 'cmd.exe /d /s /c "' + $expectedDirect + '"'
+        if ([string]$handler.command -cne $expectedDirect -or
+            [string]$handler.commandWindows -cne $expectedWindows -or
+            [int]$handler.timeout -ne 3) {
+            throw "The managed $($definition.EventName) handler is not exact."
+        }
     }
 
     if ($RequireOtherHook) {

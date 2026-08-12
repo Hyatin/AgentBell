@@ -7,6 +7,127 @@ namespace AgentBell.Desktop.Tests;
 public sealed class CodexEventIngestionTests
 {
     [Fact]
+    public async Task HandleAsync_SanitizedPermissionRequest_DefaultOffReturns202AndRemainsNonNotifying()
+    {
+        var sanitized = new AgentBell.Hook.PermissionRequestSanitizer().Sanitize(
+            new AgentBell.Contracts.CodexPermissionRequestPayload
+            {
+                HookEventName = "PermissionRequest",
+                SessionId = "private-session",
+                TurnId = "private-turn",
+                ToolUseId = "private-tool-use",
+                WorkingDirectory = "C:\\Private\\AgentBell",
+                ToolName = "Bash",
+            });
+
+        var store = new InMemoryEventStore();
+        await using var pipeline = await CreatePipelineAsync(store);
+        var logger = new CollectingDesktopDiagnosticLogger();
+        var result = await SendAsync(sanitized.Json, pipeline, store, logger);
+
+        Assert.Equal(StatusCodes.Status202Accepted, result.StatusCode);
+        Assert.Empty(result.Store.Snapshot);
+        Assert.Equal(0, result.Store.SaveCount);
+        var observed = await pipeline.GetPermissionAsync(
+            sanitized.Event.EventId,
+            CancellationToken.None);
+        Assert.Equal(PermissionLifecycleState.Observed, observed?.State);
+        Assert.Equal("command", observed?.ToolCategory);
+        Assert.Equal("AgentBell", observed?.Project);
+        var diagnostic = Assert.Single(result.Logger.Events);
+        Assert.Equal("codex-permission-request", diagnostic.EventType);
+        Assert.Equal("command", diagnostic.ToolCategory);
+        Assert.Equal(12, diagnostic.SessionIdHash?.Length);
+        Assert.Equal("permission_observed_off", diagnostic.Result);
+    }
+
+    [Fact]
+    public async Task HandleAsync_RawPermissionRequest_IsIgnoredRatherThanAcceptingSensitiveInput()
+    {
+        var result = await SendJsonAsync("""
+            {
+              "hook_event_name":"PermissionRequest",
+              "tool_input":{"command":"must-never-enter-desktop"}
+            }
+            """);
+
+        Assert.Equal(StatusCodes.Status204NoContent, result.StatusCode);
+        Assert.Empty(result.Store.Snapshot);
+    }
+
+    [Fact]
+    public async Task HandleAsync_SanitizedPostToolUse_ResolvesObservedAndReturns202()
+    {
+        var permission = new AgentBell.Hook.PermissionRequestSanitizer().Sanitize(
+            new AgentBell.Contracts.CodexPermissionRequestPayload
+            {
+                HookEventName = "PermissionRequest",
+                SessionId = "private-session",
+                TurnId = "private-turn",
+                ToolUseId = "private-tool-use",
+                ToolName = "Bash",
+            });
+        var postToolUse = new AgentBell.Hook.PostToolUseSanitizer().Sanitize(
+            new AgentBell.Contracts.CodexPostToolUsePayload
+            {
+                HookEventName = "PostToolUse",
+                SessionId = "private-session",
+                TurnId = "private-turn",
+                ToolUseId = "private-tool-use",
+                ToolName = "Bash",
+            });
+        var store = new InMemoryEventStore();
+        await using var pipeline = await CreatePipelineAsync(store);
+        await pipeline.AcceptAsync(permission.Event, CancellationToken.None);
+        var logger = new CollectingDesktopDiagnosticLogger();
+
+        var result = await SendAsync(postToolUse.Json, pipeline, store, logger);
+
+        Assert.Equal(StatusCodes.Status202Accepted, result.StatusCode);
+        Assert.Equal(
+            PermissionLifecycleState.Resolved,
+            (await pipeline.GetPermissionAsync(
+                permission.Event.EventId,
+                CancellationToken.None))?.State);
+        Assert.Empty(store.Snapshot);
+        var diagnostic = Assert.Single(logger.Events);
+        Assert.Equal("codex-post-tool-use", diagnostic.EventType);
+        Assert.Equal("resolved_observed", diagnostic.Result);
+        var diagnosticJson = JsonSerializer.Serialize(diagnostic);
+        Assert.DoesNotContain("private-session", diagnosticJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-turn", diagnosticJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-tool-use", diagnosticJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HandleAsync_DuplicatePermissionRequest_SavesAndPublishesOnce()
+    {
+        var sanitized = new AgentBell.Hook.PermissionRequestSanitizer().Sanitize(
+            new AgentBell.Contracts.CodexPermissionRequestPayload
+            {
+                HookEventName = "PermissionRequest",
+                SessionId = "same-session",
+                TurnId = "same-turn",
+                ToolUseId = "same-tool",
+                ToolName = "Bash",
+            });
+        var store = new InMemoryEventStore();
+        await using var pipeline = await CreatePipelineAsync(
+            store,
+            PermissionNotificationPolicy.AlwaysNotify);
+        var logger = new CollectingDesktopDiagnosticLogger();
+
+        var first = await SendAsync(sanitized.Json, pipeline, store, logger);
+        var duplicate = await SendAsync(sanitized.Json, pipeline, store, logger);
+
+        Assert.Equal(202, first.StatusCode);
+        Assert.Equal(202, duplicate.StatusCode);
+        Assert.Single(store.Snapshot);
+        Assert.Equal(1, store.SaveCount);
+        Assert.True(logger.Events[^1].IsDuplicate);
+    }
+
+    [Fact]
     public async Task HandleAsync_NormalStopEvent_Returns202AndPersistsSanitizedEvent()
     {
         const string Json = """
@@ -44,6 +165,32 @@ public sealed class CodexEventIngestionTests
         Assert.DoesNotContain("private-turn", diagnosticJson, StringComparison.Ordinal);
         Assert.DoesNotContain("C:\\Private\\AgentBell", diagnosticJson, StringComparison.Ordinal);
         Assert.DoesNotContain("完成了 M1", diagnosticJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HandleAsync_ActionClassifiedStop_LogsOnlyRuleMetadataWithoutSourceText()
+    {
+        const string SourceText = "Please confirm before I continue with <REDACTED_TEST_DETAIL>.";
+        var result = await SendJsonAsync(JsonSerializer.Serialize(new
+        {
+            hook_event_name = "Stop",
+            session_id = "test-session-reference",
+            turn_id = "test-turn-reference",
+            last_assistant_message = SourceText,
+        }));
+
+        Assert.Equal(StatusCodes.Status202Accepted, result.StatusCode);
+        var persisted = Assert.Single(result.Store.Snapshot);
+        Assert.Equal("confirmation_required", persisted.ActionType);
+        Assert.Null(persisted.Summary);
+        var diagnostic = Assert.Single(result.Logger.Events);
+        Assert.Equal("confirmation_required", diagnostic.ClassifiedAs);
+        Assert.Equal("confirm_en_please", diagnostic.MatchedRuleId);
+        Assert.Equal("high", diagnostic.ConfidenceBand);
+        Assert.DoesNotContain(
+            SourceText,
+            JsonSerializer.Serialize(diagnostic),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -196,9 +343,19 @@ public sealed class CodexEventIngestionTests
         return new IngestionRun(context.Response.StatusCode, store, logger);
     }
 
-    private static async Task<EventPipeline> CreatePipelineAsync(InMemoryEventStore store)
+    private static async Task<EventPipeline> CreatePipelineAsync(
+        InMemoryEventStore store,
+        PermissionNotificationPolicy permissionPolicy = PermissionNotificationPolicy.Off)
     {
-        var pipeline = new EventPipeline(store, new CodexEventTransformer());
+        var settings = new DesktopNotificationSettingsState();
+        settings.Update(new DesktopNotificationSettings
+        {
+            PermissionNotificationPolicy = permissionPolicy,
+        });
+        var pipeline = new EventPipeline(
+            store,
+            new CodexEventTransformer(),
+            notificationSettings: settings);
         await pipeline.InitializeAsync(CancellationToken.None);
         return pipeline;
     }

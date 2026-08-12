@@ -14,6 +14,8 @@ import com.hyatin.agentbell.connection.ConnectionState
 import com.hyatin.agentbell.localization.AppLanguage
 import com.hyatin.agentbell.localization.AppLanguageController
 import com.hyatin.agentbell.notification.AgentBellNotificationManager
+import com.hyatin.agentbell.notification.NotificationPreferencesState
+import com.hyatin.agentbell.notification.PermissionNotificationPolicy
 import com.hyatin.agentbell.pairing.PairingValidationResult
 import com.hyatin.agentbell.pairing.PrivateIpv4
 import com.hyatin.agentbell.protocol.AgentEvent
@@ -47,10 +49,15 @@ sealed interface MainScreen {
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as AgentBellApplication
     private val mutableScreen = MutableStateFlow<MainScreen>(MainScreen.Loading)
+    private val mutableNotificationPreferences = MutableStateFlow(
+        app.notificationPreferences.current(),
+    )
 
     val screen: StateFlow<MainScreen> = mutableScreen.asStateFlow()
     val connectionState = app.connectionStates.state
     val events = app.eventHistory.events
+    val notificationPreferences: StateFlow<NotificationPreferencesState> =
+        mutableNotificationPreferences.asStateFlow()
 
     init {
         refreshPairing(startServiceIfEnabled = true)
@@ -138,6 +145,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         AppLanguageController.set(language)
     }
 
+    fun setNotifyTaskCompletion(enabled: Boolean) = updateNotificationPreferences {
+        copy(notifyTaskCompletion = enabled)
+    }
+
+    fun setNotifyActionRequired(enabled: Boolean) = updateNotificationPreferences {
+        copy(notifyActionRequired = enabled)
+    }
+
+    fun setPermissionNotificationPolicy(value: PermissionNotificationPolicy) {
+        updateNotificationPreferences {
+            copy(permissionNotificationPolicy = value)
+        }
+        if (value == PermissionNotificationPolicy.OFF) {
+            viewModelScope.launch { app.eventHistory.removePermissionEvents() }
+        }
+    }
+
+    fun setReplyAndConfirmationRequests(enabled: Boolean) = updateNotificationPreferences {
+        copy(replyAndConfirmationRequests = enabled)
+    }
+
     fun copyDiagnostics() {
         val clipboard = getApplication<Application>()
             .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -172,6 +200,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun notificationPermissionGranted(): Boolean = app.notifications.hasNotificationPermission()
+
+    private fun updateNotificationPreferences(
+        update: NotificationPreferencesState.() -> NotificationPreferencesState,
+    ) {
+        val value = mutableNotificationPreferences.value.update()
+        app.notificationPreferences.update(value)
+        mutableNotificationPreferences.value = value
+    }
 
     fun isXiaomiFamily(): Boolean =
         Build.MANUFACTURER.contains("xiaomi", ignoreCase = true) ||

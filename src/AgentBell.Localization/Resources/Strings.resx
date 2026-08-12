@@ -88,6 +88,36 @@
   <data name="Tray_Tooltip" xml:space="preserve"><value>AgentBell — {0}</value></data>
   <data name="WindowsNotification_Title" xml:space="preserve"><value>Codex task completed</value></data>
   <data name="WindowsNotification_Body" xml:space="preserve"><value>AgentBell received a completion event.</value></data>
+  <data name="PermissionRequired_Title" xml:space="preserve"><value>Codex needs permission</value></data>
+  <data name="PermissionRequired_Body" xml:space="preserve"><value>Open Codex to review the request for {0}.</value></data>
+  <data name="PermissionRequired_BodyGeneric" xml:space="preserve"><value>Open Codex to review the permission request.</value></data>
+  <data name="InputRequired_Title" xml:space="preserve"><value>Codex is waiting for your reply</value></data>
+  <data name="InputRequired_Body" xml:space="preserve"><value>Open Codex to continue the task in {0}.</value></data>
+  <data name="InputRequired_BodyGeneric" xml:space="preserve"><value>Open Codex to continue the task.</value></data>
+  <data name="ConfirmationRequired_Title" xml:space="preserve"><value>Codex needs confirmation</value></data>
+  <data name="ConfirmationRequired_Body" xml:space="preserve"><value>Open Codex to confirm how the task in {0} should continue.</value></data>
+  <data name="ConfirmationRequired_BodyGeneric" xml:space="preserve"><value>Open Codex to confirm how the task should continue.</value></data>
+  <data name="AttentionRequired_Title" xml:space="preserve"><value>Codex needs your attention</value></data>
+  <data name="AttentionRequired_Body" xml:space="preserve"><value>Open Codex to review the task in {0}.</value></data>
+  <data name="AttentionRequired_BodyGeneric" xml:space="preserve"><value>Open Codex to review the task.</value></data>
+  <data name="EventHistory_Title" xml:space="preserve"><value>Recent events</value></data>
+  <data name="EventHistory_Row" xml:space="preserve"><value>{0} · {1} · {2}</value></data>
+  <data name="EventHistory_Details" xml:space="preserve"><value>Type: {0}   Project: {1}   Time: {2}</value></data>
+  <data name="EventHistory_NoneSelected" xml:space="preserve"><value>Select an event to view its safe metadata.</value></data>
+  <data name="EventType_Completed" xml:space="preserve"><value>Completed</value></data>
+  <data name="EventType_PermissionRequired" xml:space="preserve"><value>Permission required</value></data>
+  <data name="EventType_InputRequired" xml:space="preserve"><value>Reply required</value></data>
+  <data name="EventType_ConfirmationRequired" xml:space="preserve"><value>Confirmation required</value></data>
+  <data name="EventType_AttentionRequired" xml:space="preserve"><value>Attention required</value></data>
+  <data name="Settings_NotifyTaskCompletion" xml:space="preserve"><value>Notify when tasks complete</value></data>
+  <data name="Settings_NotifyActionRequired" xml:space="preserve"><value>Notify when Codex needs attention</value></data>
+  <data name="Settings_PermissionRequestNotifications" xml:space="preserve"><value>Permission request notifications</value></data>
+  <data name="PermissionPolicy_Off" xml:space="preserve"><value>Off</value></data>
+  <data name="PermissionPolicy_AlwaysNotify" xml:space="preserve"><value>Always notify</value></data>
+  <data name="Settings_PermissionRequestNotificationsHelp" xml:space="preserve"><value>Codex does not currently expose whether a permission request is being handled by Auto-review or is waiting for you. “Always notify” may therefore alert you for requests that Codex handles automatically.</value></data>
+  <data name="Settings_NotifyReplyRequests" xml:space="preserve"><value>Reply and confirmation requests</value></data>
+  <data name="Settings_DetectQuestions" xml:space="preserve"><value>Detect questions in completed responses</value></data>
+  <data name="Settings_SaveNotificationsFailed" xml:space="preserve"><value>Could not save notification settings.</value></data>
   <data name="Error_LocalServiceStartFailed" xml:space="preserve"><value>The local receiving service could not start. Check whether another program is using 127.0.0.1:17863, then export diagnostics.</value></data>
   <data name="Error_StartupUpdateFailed" xml:space="preserve"><value>Could not update startup for the current user.</value></data>
   <data name="Error_OpenFolderFailed" xml:space="preserve"><value>Could not open the folder.</value></data>

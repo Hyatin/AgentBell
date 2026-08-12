@@ -8,8 +8,14 @@ public sealed class MainForm : Form
 {
     private readonly TrayApplicationContext _context;
     private readonly Dictionary<string, Label> _values = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CheckBox> _notificationChecks = new(StringComparer.Ordinal);
+    private ComboBox _permissionPolicy = new();
+    private Panel? _scrollHost;
     private TableLayoutPanel? _root;
     private PictureBox _pairingQr = new();
+    private ListBox _eventHistory = new();
+    private Label _eventDetails = new();
+    private string? _pendingEventSelection;
     private bool _refreshing;
     private bool _rebuilding;
     private bool _allowClose;
@@ -26,13 +32,19 @@ public sealed class MainForm : Form
         BuildContent();
 
         FormClosing += OnFormClosing;
+        Resize += (_, _) => ReflowContent();
+        DpiChanged += (_, _) => ReflowContent();
         FormClosed += (_, _) =>
         {
             var image = _pairingQr.Image;
             _pairingQr.Image = null;
             image?.Dispose();
         };
-        Shown += (_, _) => BeginRefresh();
+        Shown += (_, _) =>
+        {
+            ReflowContent();
+            BeginRefresh();
+        };
     }
 
     private IAppLocalizer Texts => _context.Localizer;
@@ -53,6 +65,13 @@ public sealed class MainForm : Form
     /// <summary>Schedules a safe UI refresh.</summary>
     public void BeginRefresh() => RunUiTask(RefreshAsync);
 
+    /// <summary>Selects a sanitized history event after a notification click.</summary>
+    public void SelectEvent(string eventId)
+    {
+        _pendingEventSelection = eventId;
+        BeginRefresh();
+    }
+
     private void BuildContent()
     {
         _rebuilding = true;
@@ -60,43 +79,46 @@ public sealed class MainForm : Form
         {
             var image = _pairingQr.Image;
             _pairingQr.Image = null;
-            var previousRoot = _root;
-            if (previousRoot is not null)
+            var previousScrollHost = _scrollHost;
+            if (previousScrollHost is not null)
             {
-                Controls.Remove(previousRoot);
-                previousRoot.Dispose();
+                Controls.Remove(previousScrollHost);
+                previousScrollHost.Dispose();
             }
 
             _pairingQr = new PictureBox { Image = image };
+            _eventHistory = new ListBox();
+            _eventDetails = new Label();
+            _permissionPolicy = new ComboBox();
             _values.Clear();
-            _root = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                AutoScroll = true,
-                AutoSize = true,
-                ColumnCount = 1,
-                Padding = new Padding(16),
-            };
-            _root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            Controls.Add(_root);
+            _notificationChecks.Clear();
+            _scrollHost = MainFormLayout.CreateScrollHost(out var root);
+            _root = root;
+            Controls.Add(_scrollHost);
 
-            _root.Controls.Add(CreateStatusGroup());
-            _root.Controls.Add(CreatePairingGroup());
-            _root.Controls.Add(CreateSettingsGroup());
-            _root.Controls.Add(CreateActionsGroup());
-            _root.Controls.Add(new Label
-            {
-                AutoSize = true,
-                MaximumSize = new Size(780, 0),
-                Text = Texts.Get("Main_BetaSecurityNotice"),
-                ForeColor = Color.DarkSlateGray,
-                Padding = new Padding(4, 12, 4, 4),
-            });
+            MainFormLayout.AddAutoSizeRow(_root, CreateStatusGroup());
+            MainFormLayout.AddAutoSizeRow(_root, CreateEventHistoryGroup());
+            MainFormLayout.AddAutoSizeRow(_root, CreatePairingGroup());
+            MainFormLayout.AddAutoSizeRow(_root, CreateSettingsGroup());
+            MainFormLayout.AddAutoSizeRow(_root, CreateActionsGroup());
+            MainFormLayout.AddAutoSizeRow(
+                _root,
+                MainFormLayout.CreateWrappingLabel(
+                    MainFormLayout.BetaSecurityNoticeName,
+                    Texts.Get("Main_BetaSecurityNotice"),
+                    Color.DarkSlateGray,
+                    new Padding(4, 12, 4, 4)));
+            ReflowContent();
         }
         finally
         {
             _rebuilding = false;
         }
+    }
+
+    private void ReflowContent()
+    {
+        MainFormLayout.Reflow(_scrollHost, _root);
     }
 
     private GroupBox CreateStatusGroup()
@@ -127,8 +149,8 @@ public sealed class MainForm : Form
     private GroupBox CreatePairingGroup()
     {
         var group = CreateGroup("Main_Pairing");
-        var layout = CreateVerticalFlow();
-        layout.Controls.Add(new Label
+        var layout = MainFormLayout.CreateVerticalTable();
+        MainFormLayout.AddAutoSizeRow(layout, new Label
         {
             AutoSize = true,
             Text = Texts.Format("Pairing_ComputerName", Environment.MachineName),
@@ -136,17 +158,22 @@ public sealed class MainForm : Form
         _pairingQr.Size = new Size(280, 280);
         _pairingQr.SizeMode = PictureBoxSizeMode.Zoom;
         _pairingQr.BorderStyle = BorderStyle.FixedSingle;
-        layout.Controls.Add(_pairingQr);
-        layout.Controls.Add(new Label
+        MainFormLayout.AddAutoSizeRow(layout, _pairingQr);
+        MainFormLayout.AddAutoSizeRow(
+            layout,
+            MainFormLayout.CreateWrappingLabel(
+                "PairingCredentialNotice",
+                Texts.Get("Pairing_CredentialNotice")));
+        var buttons = new FlowLayoutPanel
         {
+            Dock = DockStyle.Top,
             AutoSize = true,
-            MaximumSize = new Size(760, 0),
-            Text = Texts.Get("Pairing_CredentialNotice"),
-        });
-        var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = true };
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+        };
         buttons.Controls.Add(CreateButton("Pairing_RegenerateQr", RegenerateQrAsync));
         buttons.Controls.Add(CreateButton("Pairing_CopyUrl", CopyPairingUrlAsync));
-        layout.Controls.Add(buttons);
+        MainFormLayout.AddAutoSizeRow(layout, buttons);
         group.Controls.Add(layout);
         return group;
     }
@@ -154,10 +181,12 @@ public sealed class MainForm : Form
     private GroupBox CreateSettingsGroup()
     {
         var group = CreateGroup("Settings_Title");
+        var layout = MainFormLayout.CreateVerticalTable();
         var row = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
             AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
         };
@@ -188,62 +217,145 @@ public sealed class MainForm : Form
             }
         };
         row.Controls.Add(language);
-        group.Controls.Add(row);
-        return group;
-    }
-
-    private GroupBox CreateActionsGroup()
-    {
-        var group = CreateGroup("Main_Actions");
-        var layout = CreateVerticalFlow();
-        var buttons = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            WrapContents = true,
-        };
-        buttons.Controls.Add(CreateButton("Action_RepairCodexIntegration", _context.RepairIntegrationAsync));
-        buttons.Controls.Add(CreateButton("Action_ToggleStartup", ToggleStartupAsync));
-        buttons.Controls.Add(CreateButton("Action_OpenAndroidFolder", () =>
-        {
-            _context.OpenAndroidFolder();
-            return Task.CompletedTask;
-        }));
-        buttons.Controls.Add(CreateButton("Action_ExportDiagnostics", _context.ExportDiagnosticsAsync));
-        buttons.Controls.Add(CreateButton("Action_StopServices", _context.StopServicesAsync));
-        buttons.Controls.Add(CreateButton("Action_StartServices", _context.StartServicesAsync));
-        buttons.Controls.Add(CreateButton("Common_Exit", () =>
-        {
-            _allowClose = true;
-            _context.BeginExit();
-            return Task.CompletedTask;
-        }));
-        layout.Controls.Add(buttons);
-        layout.Controls.Add(new Label
-        {
-            AutoSize = true,
-            MaximumSize = new Size(760, 0),
-            Text = Texts.Get("Action_HookTrustNotice"),
-        });
+        MainFormLayout.AddAutoSizeRow(layout, row);
+        AddNotificationCheck(
+            layout,
+            "notifyTaskCompletion",
+            "Settings_NotifyTaskCompletion");
+        AddNotificationCheck(
+            layout,
+            "notifyActionRequired",
+            "Settings_NotifyActionRequired");
+        AddPermissionNotificationPolicy(layout);
+        AddNotificationCheck(
+            layout,
+            "notifyReplyRequests",
+            "Settings_NotifyReplyRequests");
+        AddNotificationCheck(
+            layout,
+            "detectQuestions",
+            "Settings_DetectQuestions");
         group.Controls.Add(layout);
         return group;
     }
 
-    private GroupBox CreateGroup(string resourceKey) => new()
+    private void AddPermissionNotificationPolicy(TableLayoutPanel parent)
     {
-        Text = Texts.Get(resourceKey),
-        Dock = DockStyle.Top,
-        AutoSize = true,
-        Padding = new Padding(12),
-    };
+        var row = new FlowLayoutPanel
+        {
+            Name = "PermissionNotificationPolicyRow",
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            Padding = new Padding(0, 0, 0, 8),
+        };
+        row.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Text = Texts.Get("Settings_PermissionRequestNotifications"),
+            Padding = new Padding(0, 7, 8, 0),
+        });
+        _permissionPolicy = new ComboBox
+        {
+            Name = "PermissionNotificationPolicy",
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Width = 220,
+        };
+        _permissionPolicy.Items.AddRange(
+        [
+            new PermissionPolicyOption(
+                PermissionNotificationPolicy.Off,
+                Texts.Get("PermissionPolicy_Off")),
+            new PermissionPolicyOption(
+                PermissionNotificationPolicy.AlwaysNotify,
+                Texts.Get("PermissionPolicy_AlwaysNotify")),
+        ]);
+        _permissionPolicy.SelectedIndex = 0;
+        _permissionPolicy.SelectedIndexChanged += (_, _) =>
+        {
+            if (!_rebuilding && !_refreshing)
+            {
+                RunUiTask(SaveNotificationSettingsAsync);
+            }
+        };
+        row.Controls.Add(_permissionPolicy);
+        MainFormLayout.AddAutoSizeRow(parent, row);
+        MainFormLayout.AddAutoSizeRow(
+            parent,
+            MainFormLayout.CreateWrappingLabel(
+                "PermissionNotificationPolicyHelp",
+                Texts.Get("Settings_PermissionRequestNotificationsHelp"),
+                Color.DarkSlateGray,
+                new Padding(0, 2, 0, 8)));
+    }
 
-    private static FlowLayoutPanel CreateVerticalFlow() => new()
+    private GroupBox CreateEventHistoryGroup()
     {
-        Dock = DockStyle.Top,
-        AutoSize = true,
-        FlowDirection = FlowDirection.TopDown,
-        WrapContents = false,
-    };
+        var group = CreateGroup("EventHistory_Title");
+        var layout = MainFormLayout.CreateVerticalTable();
+        _eventHistory.Dock = DockStyle.Top;
+        _eventHistory.Height = 140;
+        _eventHistory.SelectedIndexChanged += (_, _) => UpdateSelectedEventDetails();
+        _eventDetails = MainFormLayout.CreateWrappingLabel("EventDetails", string.Empty);
+        MainFormLayout.AddAutoSizeRow(layout, _eventHistory);
+        MainFormLayout.AddAutoSizeRow(layout, _eventDetails);
+        group.Controls.Add(layout);
+        return group;
+    }
+
+    private void AddNotificationCheck(
+        TableLayoutPanel parent,
+        string key,
+        string resourceKey)
+    {
+        var checkBox = new CheckBox
+        {
+            AutoSize = true,
+            Checked = true,
+            Text = Texts.Get(resourceKey),
+        };
+        checkBox.CheckedChanged += (_, _) =>
+        {
+            if (!_rebuilding && !_refreshing)
+            {
+                RunUiTask(SaveNotificationSettingsAsync);
+            }
+        };
+        _notificationChecks[key] = checkBox;
+        MainFormLayout.AddAutoSizeRow(parent, checkBox);
+    }
+
+    private GroupBox CreateActionsGroup()
+    {
+        var buttons = new[]
+        {
+            CreateButton("Action_RepairCodexIntegration", _context.RepairIntegrationAsync),
+            CreateButton("Action_ToggleStartup", ToggleStartupAsync),
+            CreateButton("Action_OpenAndroidFolder", () =>
+            {
+                _context.OpenAndroidFolder();
+                return Task.CompletedTask;
+            }),
+            CreateButton("Action_ExportDiagnostics", _context.ExportDiagnosticsAsync),
+            CreateButton("Action_StopServices", _context.StopServicesAsync),
+            CreateButton("Action_StartServices", _context.StartServicesAsync),
+            CreateButton("Common_Exit", () =>
+            {
+                _allowClose = true;
+                _context.BeginExit();
+                return Task.CompletedTask;
+            }),
+        };
+        return MainFormLayout.CreateActionsGroup(
+            Texts.Get("Main_Actions"),
+            buttons,
+            Texts.Get("Action_HookTrustNotice"));
+    }
+
+    private GroupBox CreateGroup(string resourceKey) =>
+        MainFormLayout.CreateGroup(Texts.Get(resourceKey));
 
     private void AddStatusRow(TableLayoutPanel table, string key, string captionKey)
     {
@@ -255,13 +367,10 @@ public sealed class MainForm : Form
             Text = Texts.Get(captionKey),
             Padding = new Padding(0, 4, 8, 4),
         }, 0, row);
-        var value = new Label
-        {
-            AutoSize = true,
-            MaximumSize = new Size(550, 0),
-            Text = "—",
-            Padding = new Padding(0, 4, 0, 4),
-        };
+        var value = MainFormLayout.CreateWrappingLabel(
+            $"StatusValue_{key}",
+            "—",
+            padding: new Padding(0, 4, 0, 4));
         table.Controls.Add(value, 1, row);
         _values[key] = value;
     }
@@ -270,6 +379,7 @@ public sealed class MainForm : Form
     {
         var button = new Button
         {
+            Name = textKey == "Common_Exit" ? MainFormLayout.ExitButtonName : textKey,
             AutoSize = true,
             Text = Texts.Get(textKey),
             Margin = new Padding(4),
@@ -313,11 +423,125 @@ public sealed class MainForm : Form
             }
 
             LoadQr(snapshot.PairingQrAvailable ? snapshot.PairingQrCodePath : null);
+            SetNotificationCheck("notifyTaskCompletion", snapshot.NotificationSettings.NotifyTaskCompletion);
+            SetNotificationCheck("notifyActionRequired", snapshot.NotificationSettings.NotifyActionRequired);
+            SetPermissionNotificationPolicy(
+                snapshot.NotificationSettings.PermissionNotificationPolicy);
+            SetNotificationCheck(
+                "notifyReplyRequests",
+                snapshot.NotificationSettings.NotifyReplyAndConfirmationRequests);
+            SetNotificationCheck(
+                "detectQuestions",
+                snapshot.NotificationSettings.DetectQuestionsInCompletedResponses);
+            RefreshEventHistory(snapshot.RecentEvents);
         }
         finally
         {
             _refreshing = false;
+            ReflowContent();
         }
+    }
+
+    private Task SaveNotificationSettingsAsync() => _context.SetNotificationSettingsAsync(new()
+    {
+        NotifyTaskCompletion = IsNotificationChecked("notifyTaskCompletion"),
+        NotifyActionRequired = IsNotificationChecked("notifyActionRequired"),
+        PermissionNotificationPolicy = GetPermissionNotificationPolicy(),
+        NotifyReplyAndConfirmationRequests = IsNotificationChecked("notifyReplyRequests"),
+        DetectQuestionsInCompletedResponses = IsNotificationChecked("detectQuestions"),
+    });
+
+    private bool IsNotificationChecked(string key) =>
+        _notificationChecks.TryGetValue(key, out var checkBox) && checkBox.Checked;
+
+    private void SetNotificationCheck(string key, bool value)
+    {
+        if (_notificationChecks.TryGetValue(key, out var checkBox))
+        {
+            checkBox.Checked = value;
+        }
+    }
+
+    private PermissionNotificationPolicy GetPermissionNotificationPolicy() =>
+        (_permissionPolicy.SelectedItem as PermissionPolicyOption)?.Value
+        ?? PermissionNotificationPolicy.Off;
+
+    private void SetPermissionNotificationPolicy(PermissionNotificationPolicy value)
+    {
+        foreach (var item in _permissionPolicy.Items.OfType<PermissionPolicyOption>())
+        {
+            if (item.Value == value)
+            {
+                _permissionPolicy.SelectedItem = item;
+                return;
+            }
+        }
+
+        _permissionPolicy.SelectedIndex = 0;
+    }
+
+    private void RefreshEventHistory(IReadOnlyList<AgentBell.Contracts.AgentEvent> events)
+    {
+        var selectedId = _pendingEventSelection
+            ?? (_eventHistory.SelectedItem as EventHistoryItem)?.Event.EventId;
+        _eventHistory.BeginUpdate();
+        try
+        {
+            _eventHistory.Items.Clear();
+            foreach (var agentEvent in events
+                .Where(item => item.ResolvedAt is null)
+                .OrderByDescending(item => item.Sequence))
+            {
+                _eventHistory.Items.Add(new EventHistoryItem(agentEvent, EventDisplayText(agentEvent)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(selectedId))
+            {
+                for (var index = 0; index < _eventHistory.Items.Count; index++)
+                {
+                    if (_eventHistory.Items[index] is EventHistoryItem item
+                        && item.Event.EventId == selectedId)
+                    {
+                        _eventHistory.SelectedIndex = index;
+                        break;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            _eventHistory.EndUpdate();
+            _pendingEventSelection = null;
+        }
+
+        UpdateSelectedEventDetails();
+    }
+
+    private string EventDisplayText(AgentBell.Contracts.AgentEvent agentEvent) =>
+        Texts.Format(
+            "EventHistory_Row",
+            EventTypeText(agentEvent),
+            string.IsNullOrWhiteSpace(agentEvent.Project) ? "—" : agentEvent.Project,
+            agentEvent.OccurredAt.ToLocalTime().ToString("g"));
+
+    private string EventTypeText(AgentBell.Contracts.AgentEvent agentEvent) => agentEvent.ActionType switch
+    {
+        AgentBell.Contracts.AgentActionTypes.PermissionRequired => Texts.Get("EventType_PermissionRequired"),
+        AgentBell.Contracts.AgentActionTypes.InputRequired => Texts.Get("EventType_InputRequired"),
+        AgentBell.Contracts.AgentActionTypes.ConfirmationRequired => Texts.Get("EventType_ConfirmationRequired"),
+        AgentBell.Contracts.AgentActionTypes.AttentionRequired => Texts.Get("EventType_AttentionRequired"),
+        _ => Texts.Get("EventType_Completed"),
+    };
+
+    private void UpdateSelectedEventDetails()
+    {
+        _eventDetails.Text = _eventHistory.SelectedItem is EventHistoryItem item
+            ? Texts.Format(
+                "EventHistory_Details",
+                EventTypeText(item.Event),
+                string.IsNullOrWhiteSpace(item.Event.Project) ? "—" : item.Event.Project,
+                item.Event.OccurredAt.ToLocalTime().ToString("F"))
+            : Texts.Get("EventHistory_NoneSelected");
     }
 
     private async Task RegenerateQrAsync()
@@ -420,6 +644,20 @@ public sealed class MainForm : Form
     }
 
     private sealed record LanguageOption(AppLanguage Value, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private sealed record PermissionPolicyOption(
+        PermissionNotificationPolicy Value,
+        string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private sealed record EventHistoryItem(
+        AgentBell.Contracts.AgentEvent Event,
+        string Label)
     {
         public override string ToString() => Label;
     }

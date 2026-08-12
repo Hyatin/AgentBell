@@ -160,6 +160,38 @@ public sealed class LanHostIntegrationTests
     }
 
     [Fact]
+    public async Task WebSocket_ActionRequired_IsBroadcastOnceAndReplayedWithAdditiveFields()
+    {
+        await using var server = await LanTestServer.StartAsync();
+        using var socket = await server.ConnectWithQueryAsync();
+        _ = await ReceiveTextAsync(socket);
+        await SendTextAsync(socket, "{\"type\":\"resume\",\"lastSequence\":0}");
+
+        await server.AcceptActionAsync();
+        await server.AcceptActionAsync();
+
+        using var live = JsonDocument.Parse(await ReceiveTextAsync(socket));
+        var payload = live.RootElement.GetProperty("payload");
+        Assert.Equal(AgentEventCategories.ActionRequired, payload.GetProperty("category").GetString());
+        Assert.Equal(AgentActionTypes.PermissionRequired, payload.GetProperty("actionType").GetString());
+        Assert.Equal(AgentToolCategories.Command, payload.GetProperty("toolCategory").GetString());
+        Assert.False(payload.TryGetProperty("toolInput", out _));
+        Assert.False(payload.TryGetProperty("command", out _));
+
+        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "reconnect", CancellationToken.None);
+        using var replaySocket = await server.ConnectWithQueryAsync();
+        _ = await ReceiveTextAsync(replaySocket);
+        await SendTextAsync(replaySocket, "{\"type\":\"resume\",\"lastSequence\":0}");
+        using var replay = JsonDocument.Parse(await ReceiveTextAsync(replaySocket));
+        Assert.Equal(
+            AgentActionTypes.PermissionRequired,
+            replay.RootElement.GetProperty("payload").GetProperty("actionType").GetString());
+        using var noDuplicate = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => ReceiveTextAsync(replaySocket, noDuplicate.Token));
+    }
+
+    [Fact]
     public async Task WebSocket_RepeatedResumeDoesNotReplaySameEventIdTwice()
     {
         await using var server = await LanTestServer.StartAsync();
@@ -846,10 +878,17 @@ public sealed class LanHostIntegrationTests
                     logger,
                     timeProvider,
                     options: webSocketOptions);
+                var notificationSettings = new DesktopNotificationSettingsState();
+                notificationSettings.Update(new DesktopNotificationSettings
+                {
+                    PermissionNotificationPolicy =
+                        PermissionNotificationPolicy.AlwaysNotify,
+                });
                 var pipeline = new EventPipeline(
                     new InMemoryEventStore(),
                     new CodexEventTransformer(),
-                    new WebSocketEventPublisher(manager));
+                    new WebSocketEventPublisher(manager),
+                    notificationSettings: notificationSettings);
                 await pipeline.InitializeAsync(CancellationToken.None);
                 application = LanHost.BuildForTesting(
                     IPAddress.Loopback,
@@ -905,6 +944,20 @@ public sealed class LanHostIntegrationTests
                     TurnId = turnId,
                     WorkingDirectory = "C:\\Private\\AgentBell",
                     LastAssistantMessage = "完成 M2 🔔",
+                },
+                CancellationToken.None);
+
+        public Task<EventAcceptanceResult> AcceptActionAsync() =>
+            Pipeline.AcceptAsync(
+                new SanitizedActionRequiredEvent
+                {
+                    EventId = "codex-action:00112233445566778899aabb",
+                    SessionIdHash = "001122334455",
+                    TurnIdHash = "66778899aabb",
+                    ToolUseIdHash = "ccddee112233",
+                    Project = "AgentBell",
+                    ToolCategory = AgentToolCategories.Command,
+                    OccurredAt = DateTimeOffset.Parse("2026-08-06T00:00:00Z"),
                 },
                 CancellationToken.None);
 

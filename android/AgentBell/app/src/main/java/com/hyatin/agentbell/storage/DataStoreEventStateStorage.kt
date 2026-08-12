@@ -68,10 +68,17 @@ class DataStoreEventStateStorage(
                         agent = agent,
                         status = status,
                         title = title,
+                        category = item.nullableString("category", 32) ?: "completion",
+                        actionType = item.nullableString("actionType", 32) ?: "none",
+                        toolCategory = item.nullableString("toolCategory", 32) ?: "none",
                         project = item.nullableString("project", 256),
                         summary = item.nullableString("summary", 1024),
+                        threadIdHash = item.nullableString("threadIdHash", 12),
+                        turnIdHash = item.nullableString("turnIdHash", 12),
+                        toolUseIdHash = item.nullableString("toolUseIdHash", 12),
                         occurredAt = occurredAt,
                         sequence = sequence,
+                        resolvedAt = item.nullableString("resolvedAt", 64),
                     ),
                 )
             }
@@ -86,10 +93,17 @@ class DataStoreEventStateStorage(
                     .put("agent", event.agent)
                     .put("status", event.status)
                     .put("title", event.title)
+                    .put("category", event.category)
+                    .put("actionType", event.actionType)
+                    .put("toolCategory", event.toolCategory)
                     .put("project", event.project ?: JSONObject.NULL)
                     .put("summary", event.summary ?: JSONObject.NULL)
+                    .put("threadIdHash", event.threadIdHash ?: JSONObject.NULL)
+                    .put("turnIdHash", event.turnIdHash ?: JSONObject.NULL)
+                    .put("toolUseIdHash", event.toolUseIdHash ?: JSONObject.NULL)
                     .put("occurredAt", event.occurredAt)
-                    .put("sequence", event.sequence),
+                    .put("sequence", event.sequence)
+                    .put("resolvedAt", event.resolvedAt ?: JSONObject.NULL),
             )
         }
     }

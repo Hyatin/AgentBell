@@ -7,6 +7,9 @@ import com.hyatin.agentbell.connection.ConnectionStateRepository
 import com.hyatin.agentbell.connection.PrivateLanRequestGuard
 import com.hyatin.agentbell.diagnostics.BoundedAgentBellDiagnostics
 import com.hyatin.agentbell.notification.AgentBellNotificationManager
+import com.hyatin.agentbell.notification.SharedPreferencesNotificationPreferences
+import com.hyatin.agentbell.notification.PermissionNotificationPolicy
+import com.hyatin.agentbell.protocol.AgentEventSemantics
 import com.hyatin.agentbell.pairing.OkHttpDesktopStatusTransport
 import com.hyatin.agentbell.pairing.PairingValidator
 import com.hyatin.agentbell.security.AndroidKeystorePairingTokenCipher
@@ -51,10 +54,15 @@ class AgentBellApplication : Application() {
         EventHistoryRepository(
             DataStoreEventStateStorage(agentBellEventsDataStore),
             credentialStore,
-        )
+        ) { event ->
+            event.actionType != AgentEventSemantics.ACTION_PERMISSION_REQUIRED ||
+                notificationPreferences.current().permissionNotificationPolicy ==
+                PermissionNotificationPolicy.ALWAYS_NOTIFY
+        }
     }
 
-    val notifications by lazy { AgentBellNotificationManager(this) }
+    val notificationPreferences by lazy { SharedPreferencesNotificationPreferences(this) }
+    val notifications by lazy { AgentBellNotificationManager(this, notificationPreferences) }
     val pairingValidator by lazy {
         PairingValidator(OkHttpDesktopStatusTransport(okHttpClient))
     }

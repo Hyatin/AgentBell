@@ -203,12 +203,15 @@ function Get-FileSha256 {
 function Get-AgentBellHookCount {
     $root = Get-Content -Raw -LiteralPath $hooksPath | ConvertFrom-Json
     $count = 0
-    foreach ($group in @($root.hooks.Stop)) {
-        foreach ($hook in @($group.hooks)) {
-            $commandText = ([string]$hook.command) + ' ' + ([string]$hook.commandWindows)
-            if ($commandText.IndexOf('AgentBell.Hook.exe', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-                $commandText.IndexOf('--codex-stop-hook', [StringComparison]::Ordinal) -ge 0) {
-                $count++
+    foreach ($eventName in @('Stop', 'PermissionRequest', 'PostToolUse')) {
+        foreach ($group in @($root.hooks.$eventName)) {
+            foreach ($hook in @($group.hooks)) {
+                $commandText = ([string]$hook.command) + ' ' + ([string]$hook.commandWindows)
+                if ($commandText.IndexOf('AgentBell.Hook.exe', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                    ($commandText.IndexOf('--codex-stop-hook', [StringComparison]::Ordinal) -ge 0 -or
+                     $commandText.IndexOf('--codex-permission-request-hook', [StringComparison]::Ordinal) -ge 0)) {
+                    $count++
+                }
             }
         }
     }
@@ -371,8 +374,8 @@ try {
         }
     }
 
-    if ((Get-AgentBellHookCount) -ne 1) {
-        throw 'Installation did not merge exactly one AgentBell Stop Hook.'
+    if ((Get-AgentBellHookCount) -ne 3) {
+        throw 'Installation did not merge exactly one Stop, one PermissionRequest, and one PostToolUse Hook.'
     }
 
     Assert-OtherHookPreserved
@@ -406,8 +409,8 @@ try {
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
     ) -FailureMessage 'Silent upgrade failed.'
 
-    if ((Get-AgentBellHookCount) -ne 1) {
-        throw 'Upgrade produced a duplicate AgentBell Hook.'
+    if ((Get-AgentBellHookCount) -ne 3) {
+        throw 'Upgrade produced a missing or duplicate AgentBell Hook.'
     }
 
     Assert-OtherHookPreserved
@@ -444,7 +447,7 @@ try {
     }
 
     if ((Get-AgentBellHookCount) -ne 0) {
-        throw 'Uninstall did not remove exactly the AgentBell Hook.'
+        throw 'Uninstall did not remove the AgentBell Hooks.'
     }
 
     Assert-OtherHookPreserved

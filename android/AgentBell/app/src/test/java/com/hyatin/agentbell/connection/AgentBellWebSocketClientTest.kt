@@ -65,8 +65,9 @@ class AgentBellWebSocketClientTest {
         assertEquals("/ws/v1/events", request.requestUrl?.encodedPath)
         assertNull(request.requestUrl?.query)
         assertTrue(resume.await(3, TimeUnit.SECONDS))
-        assertEquals(0, JSONObject(clientMessage!!).getLong("lastSequence"))
-        assertEquals("resume", JSONObject(clientMessage!!).getString("type"))
+        val resumeMessage = requireNotNull(clientMessage)
+        assertEquals(0, JSONObject(resumeMessage).getLong("lastSequence"))
+        assertEquals("resume", JSONObject(resumeMessage).getString("type"))
     }
 
     @Test fun realtimeAndReplayEventsShareDedupePathAndReplyToPing() {
@@ -95,6 +96,34 @@ class AgentBellWebSocketClientTest {
         assertEquals("中文完成 👩🏽‍💻", notifications.events.single().summary)
         assertEquals(1, storage.state.lastSequence)
         assertEquals(listOf("same-event"), storage.state.recentEventIds)
+    }
+
+    @Test fun actionRequiredEventUsesTheSameDedupeHistoryAndNotificationPath() {
+        val pong = CountDownLatch(1)
+        val notifications = CollectingNotificationSink()
+        server.enqueue(webSocketResponse(onOpen = { it.send(hello()) }) { socket, text ->
+            when (JSONObject(text).getString("type")) {
+                "resume" -> {
+                    val event = actionEvent("codex-action:00112233445566778899aabb", 1)
+                    socket.send(event)
+                    socket.send(event)
+                    socket.send("""{"type":"ping","timestamp":5678}""")
+                }
+                "pong" -> pong.countDown()
+            }
+        })
+        val storage = InMemoryEventStateStorage()
+        val client = createClient(storage, notifications)
+
+        client.start()
+
+        assertTrue(pong.await(3, TimeUnit.SECONDS))
+        val event = notifications.events.single()
+        assertEquals("action_required", event.category)
+        assertEquals("permission_required", event.actionType)
+        assertEquals("command", event.toolCategory)
+        assertNull(event.summary)
+        assertEquals(listOf("codex-action:00112233445566778899aabb"), storage.state.recentEventIds)
     }
 
     @Test fun protocolMismatchIsTerminalAndDoesNotReconnect() {
@@ -238,4 +267,7 @@ class AgentBellWebSocketClientTest {
 
     private fun event(eventId: String, sequence: Long, summary: String): String =
         """{"type":"event","payload":{"eventId":"$eventId","agent":"codex","status":"completed","title":"Codex 已完成当前回合","project":"AgentBell","summary":"$summary","occurredAt":"2026-08-03T00:00:00Z","sequence":$sequence}}"""
+
+    private fun actionEvent(eventId: String, sequence: Long): String =
+        """{"type":"event","payload":{"eventId":"$eventId","agent":"codex","status":"action_required","title":"Codex action required","category":"action_required","actionType":"permission_required","toolCategory":"command","project":"AgentBell","summary":null,"threadIdHash":"001122334455","turnIdHash":"66778899aabb","occurredAt":"2026-08-06T00:00:00Z","sequence":$sequence}}"""
 }

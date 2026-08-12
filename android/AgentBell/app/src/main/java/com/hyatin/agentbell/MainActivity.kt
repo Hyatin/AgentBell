@@ -58,8 +58,10 @@ import com.hyatin.agentbell.connection.ConnectionState
 import com.hyatin.agentbell.localization.AppLanguage
 import com.hyatin.agentbell.localization.AppLanguageController
 import com.hyatin.agentbell.notification.AgentBellNotificationManager
+import com.hyatin.agentbell.notification.PermissionNotificationPolicy
 import com.hyatin.agentbell.pairing.QrScannerController
 import com.hyatin.agentbell.protocol.AgentEvent
+import com.hyatin.agentbell.protocol.AgentEventSemantics
 import com.hyatin.agentbell.ui.MainScreen
 import com.hyatin.agentbell.ui.MainUiProjection
 import com.hyatin.agentbell.ui.MainViewModel
@@ -133,7 +135,10 @@ private fun AgentBellApp(viewModel: MainViewModel) {
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 is MainScreen.EventDetails -> EventDetailsScreen(current.event, viewModel)
-                MainScreen.Settings -> SettingsScreen(viewModel)
+                MainScreen.Settings -> SettingsScreen(
+                    viewModel,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
@@ -344,7 +349,13 @@ private fun EventCard(event: AgentEvent, onClick: () -> Unit) {
         Column(Modifier.padding(12.dp)) {
             Text(localizedEventTitle(event), style = MaterialTheme.typography.titleSmall)
             event.project?.let { Text(it) }
-            Text(event.summary ?: stringResource(R.string.event_turn_ended))
+            Text(
+                if (event.category == AgentEventSemantics.CATEGORY_ACTION_REQUIRED) {
+                    stringResource(R.string.event_action_required_safe_summary)
+                } else {
+                    event.summary ?: stringResource(R.string.event_turn_ended)
+                },
+            )
             Text(
                 stringResource(R.string.event_sequence_format, event.sequence),
                 style = MaterialTheme.typography.bodySmall,
@@ -360,7 +371,11 @@ private fun EventDetailsScreen(event: AgentEvent, viewModel: MainViewModel) {
     Text(
         stringResource(
             R.string.event_summary_format,
-            event.summary ?: stringResource(R.string.event_turn_ended),
+            if (event.category == AgentEventSemantics.CATEGORY_ACTION_REQUIRED) {
+                stringResource(R.string.event_action_required_safe_summary)
+            } else {
+                event.summary ?: stringResource(R.string.event_turn_ended)
+            },
         ),
     )
     Text(stringResource(R.string.event_occurred_at_format, event.occurredAt))
@@ -373,33 +388,115 @@ private fun EventDetailsScreen(event: AgentEvent, viewModel: MainViewModel) {
 }
 
 @Composable
-private fun SettingsScreen(viewModel: MainViewModel) {
+private fun SettingsScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val selected = AppLanguageController.current()
-    Text(stringResource(R.string.common_settings), style = MaterialTheme.typography.titleLarge)
-    Spacer(Modifier.height(12.dp))
-    Text(stringResource(R.string.settings_language), style = MaterialTheme.typography.titleMedium)
-    val options = listOf(
-        AppLanguage.SYSTEM to R.string.language_system,
-        AppLanguage.ENGLISH to R.string.language_english,
-        AppLanguage.CHINESE_SIMPLIFIED to R.string.language_chinese_simplified,
+    val notificationPreferences by viewModel.notificationPreferences.collectAsStateWithLifecycle()
+    LazyColumn(modifier = modifier.fillMaxWidth()) {
+        item {
+            Column {
+                Text(stringResource(R.string.common_settings), style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(12.dp))
+                Text(stringResource(R.string.settings_language), style = MaterialTheme.typography.titleMedium)
+                val options = listOf(
+                    AppLanguage.SYSTEM to R.string.language_system,
+                    AppLanguage.ENGLISH to R.string.language_english,
+                    AppLanguage.CHINESE_SIMPLIFIED to R.string.language_chinese_simplified,
+                )
+                options.forEach { (language, textResource) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.setLanguage(language) }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = selected == language,
+                            onClick = { viewModel.setLanguage(language) },
+                        )
+                        Text(stringResource(textResource))
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    stringResource(R.string.settings_notifications),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                NotificationSettingRow(
+                    R.string.settings_notify_task_completion,
+                    notificationPreferences.notifyTaskCompletion,
+                    viewModel::setNotifyTaskCompletion,
+                )
+                NotificationSettingRow(
+                    R.string.settings_notify_action_required,
+                    notificationPreferences.notifyActionRequired,
+                    viewModel::setNotifyActionRequired,
+                )
+                PermissionNotificationPolicySetting(
+                    notificationPreferences.permissionNotificationPolicy,
+                    viewModel::setPermissionNotificationPolicy,
+                )
+                NotificationSettingRow(
+                    R.string.settings_reply_confirmation_requests,
+                    notificationPreferences.replyAndConfirmationRequests,
+                    viewModel::setReplyAndConfirmationRequests,
+                )
+                TextButton(onClick = viewModel::closeSettings) {
+                    Text(stringResource(R.string.common_back))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionNotificationPolicySetting(
+    selected: PermissionNotificationPolicy,
+    onSelected: (PermissionNotificationPolicy) -> Unit,
+) {
+    Text(
+        stringResource(R.string.settings_permission_request_notifications),
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.padding(top = 8.dp),
     )
-    options.forEach { (language, textResource) ->
+    listOf(
+        PermissionNotificationPolicy.OFF to R.string.permission_notification_off,
+        PermissionNotificationPolicy.ALWAYS_NOTIFY to
+            R.string.permission_notification_always_notify,
+    ).forEach { (policy, textResource) ->
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { viewModel.setLanguage(language) }
-                .padding(vertical = 6.dp),
+                .clickable { onSelected(policy) }
+                .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             RadioButton(
-                selected = selected == language,
-                onClick = { viewModel.setLanguage(language) },
+                selected = selected == policy,
+                onClick = { onSelected(policy) },
             )
             Text(stringResource(textResource))
         }
     }
-    TextButton(onClick = viewModel::closeSettings) {
-        Text(stringResource(R.string.common_back))
+    Text(
+        stringResource(R.string.settings_permission_request_notifications_explanation),
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(bottom = 8.dp),
+    )
+}
+
+@Composable
+private fun NotificationSettingRow(
+    textResource: Int,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(stringResource(textResource), modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -411,8 +508,18 @@ private fun localized(text: UiText): String = stringResource(
 
 @Composable
 private fun localizedEventTitle(event: AgentEvent): String =
-    if (event.agent == "codex" && event.status == "completed") {
-        stringResource(R.string.event_codex_completed)
-    } else {
-        event.title
+    when (event.actionType) {
+        AgentEventSemantics.ACTION_PERMISSION_REQUIRED ->
+            stringResource(R.string.event_permission_required)
+        AgentEventSemantics.ACTION_INPUT_REQUIRED ->
+            stringResource(R.string.event_input_required)
+        AgentEventSemantics.ACTION_CONFIRMATION_REQUIRED ->
+            stringResource(R.string.event_confirmation_required)
+        AgentEventSemantics.ACTION_ATTENTION_REQUIRED ->
+            stringResource(R.string.event_attention_required)
+        else -> if (event.agent == "codex" && event.status == "completed") {
+            stringResource(R.string.event_codex_completed)
+        } else {
+            event.title
+        }
     }

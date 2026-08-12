@@ -6,13 +6,13 @@ namespace AgentBell.Integration;
 [JsonConverter(typeof(JsonStringEnumConverter<CodexIntegrationState>))]
 public enum CodexIntegrationState
 {
-    /// <summary>The exact stable AgentBell command is installed once.</summary>
+    /// <summary>Each exact stable AgentBell command Hook is installed once.</summary>
     Installed,
 
-    /// <summary>No AgentBell Stop Hook is installed.</summary>
+    /// <summary>No AgentBell managed Hook is installed.</summary>
     Missing,
 
-    /// <summary>A single safely repairable AgentBell Hook was found.</summary>
+    /// <summary>A safely repairable AgentBell Hook set was found.</summary>
     NeedsRepair,
 
     /// <summary>The file or environment could not be safely interpreted.</summary>

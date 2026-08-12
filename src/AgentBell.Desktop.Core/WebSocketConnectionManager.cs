@@ -352,6 +352,18 @@ public sealed class WebSocketConnectionManager
                         return false;
                     }
 
+                    if (agentEvent.ResolvedAt is not null)
+                    {
+                        var superseded = _pendingEvents
+                            .Where(item => item.Value.EventId == agentEvent.EventId)
+                            .Select(item => item.Key)
+                            .ToArray();
+                        foreach (var sequence in superseded)
+                        {
+                            _pendingEvents.Remove(sequence);
+                        }
+                    }
+
                     _pendingEvents[agentEvent.Sequence] = agentEvent;
                     return true;
                 }
@@ -608,20 +620,16 @@ public sealed class WebSocketConnectionManager
             var queued = true;
             lock (_eventGate)
             {
-                var combined = new SortedDictionary<long, AgentEvent>();
-                foreach (var agentEvent in history.Events)
-                {
-                    combined[agentEvent.Sequence] = agentEvent;
-                }
-
-                foreach (var pending in _pendingEvents)
-                {
-                    combined[pending.Key] = pending.Value;
-                }
+                var combined = history.Events
+                    .Concat(_pendingEvents.Values)
+                    .GroupBy(item => item.EventId, StringComparer.Ordinal)
+                    .Select(group => group.MaxBy(item => item.Sequence)!)
+                    .OrderBy(item => item.Sequence)
+                    .ToArray();
 
                 _pendingEvents.Clear();
                 _awaitingInitialResume = false;
-                foreach (var agentEvent in combined.Values)
+                foreach (var agentEvent in combined)
                 {
                     if (agentEvent.Sequence <= lastSequence
                         || agentEvent.Sequence <= _lastQueuedSequence)
@@ -683,9 +691,14 @@ public sealed class WebSocketConnectionManager
 
         private bool TryQueueEventLocked(AgentEvent agentEvent)
         {
-            if (!_sentEventIds.TryAdd(agentEvent.EventId))
+            if (agentEvent.ResolvedAt is null && !_sentEventIds.TryAdd(agentEvent.EventId))
             {
                 return true;
+            }
+
+            else if (agentEvent.ResolvedAt is not null)
+            {
+                _sentEventIds.TryAdd(agentEvent.EventId);
             }
 
             if (!TryEnqueue(new EventMessage { Payload = agentEvent }))

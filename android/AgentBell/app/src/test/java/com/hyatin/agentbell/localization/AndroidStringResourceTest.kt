@@ -29,6 +29,13 @@ class AndroidStringResourceTest {
             "notification_connection_channel_description",
             "notification_completed_channel",
             "notification_completed_channel_description",
+            "notification_action_required_channel",
+            "notification_action_required_channel_description",
+            "notification_permission_required_title",
+            "notification_input_required_title",
+            "notification_confirmation_required_title",
+            "notification_attention_required_title",
+            "settings_notify_action_required",
             "notification_connection_connected",
         ).forEach { required -> assertTrue(required in english) }
 

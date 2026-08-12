@@ -15,10 +15,13 @@ import com.hyatin.agentbell.MainActivity
 import com.hyatin.agentbell.R
 import com.hyatin.agentbell.connection.CompletionNotificationSink
 import com.hyatin.agentbell.protocol.AgentEvent
+import com.hyatin.agentbell.protocol.AgentEventSemantics
 import java.security.MessageDigest
 
 class AgentBellNotificationManager(
     private val context: Context,
+    private val preferences: NotificationPreferences =
+        SharedPreferencesNotificationPreferences(context),
 ) : CompletionNotificationSink {
     private val manager = context.getSystemService(NotificationManager::class.java)
 
@@ -33,6 +36,19 @@ class AgentBellNotificationManager(
                     R.string.notification_connection_channel_description,
                 )
                 setShowBadge(false)
+            },
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                ACTION_REQUIRED_CHANNEL_ID,
+                context.getString(R.string.notification_action_required_channel),
+                ACTION_REQUIRED_IMPORTANCE,
+            ).apply {
+                description = context.getString(
+                    R.string.notification_action_required_channel_description,
+                )
+                enableVibration(true)
+                setBypassDnd(false)
             },
         )
         manager.createNotificationChannel(
@@ -80,7 +96,23 @@ class AgentBellNotificationManager(
     }
 
     override fun post(event: AgentEvent): Boolean {
+        if (event.resolvedAt != null &&
+            event.category == AgentEventSemantics.CATEGORY_ACTION_REQUIRED
+        ) {
+            cancelActiveAction(event)
+            return false
+        }
+        if (event.category == AgentEventSemantics.CATEGORY_COMPLETION) {
+            cancelActiveAction(event)
+        }
         if (!hasNotificationPermission()) return false
+        val currentPreferences = preferences.current()
+        if (!shouldNotify(event, currentPreferences)) return false
+
+        if (event.category == AgentEventSemantics.CATEGORY_ACTION_REQUIRED) {
+            return postActionRequired(event)
+        }
+
         val title = event.project?.takeIf { it.isNotBlank() }
             ?.let {
                 context.getString(
@@ -108,6 +140,56 @@ class AgentBellNotificationManager(
         return true
     }
 
+    private fun postActionRequired(event: AgentEvent): Boolean {
+        val (titleResource, bodyResource, genericBodyResource) = when (event.actionType) {
+            AgentEventSemantics.ACTION_PERMISSION_REQUIRED -> Triple(
+                R.string.notification_permission_required_title,
+                R.string.notification_permission_required_body,
+                R.string.notification_permission_required_body_generic,
+            )
+            AgentEventSemantics.ACTION_INPUT_REQUIRED -> Triple(
+                R.string.notification_input_required_title,
+                R.string.notification_input_required_body,
+                R.string.notification_input_required_body_generic,
+            )
+            AgentEventSemantics.ACTION_CONFIRMATION_REQUIRED -> Triple(
+                R.string.notification_confirmation_required_title,
+                R.string.notification_confirmation_required_body,
+                R.string.notification_confirmation_required_body_generic,
+            )
+            else -> Triple(
+                R.string.notification_attention_required_title,
+                R.string.notification_attention_required_body,
+                R.string.notification_attention_required_body_generic,
+            )
+        }
+        val body = event.project?.takeIf { it.isNotBlank() }
+            ?.let { context.getString(bodyResource, truncate(it, 80)) }
+            ?: context.getString(genericBodyResource)
+        val notificationId = actionNotificationId(event)
+        val eventKey = stableEventKey(event.eventId)
+        val notification = NotificationCompat.Builder(context, ACTION_REQUIRED_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle(context.getString(titleResource))
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setContentIntent(mainPendingIntent(notificationId, eventKey))
+            .build()
+        manager.notify(notificationId, notification)
+        return true
+    }
+
+    private fun cancelActiveAction(completion: AgentEvent) {
+        if (!completion.turnIdHash.isNullOrBlank()) {
+            manager.cancel(actionNotificationId(completion))
+        }
+    }
+
     private fun mainPendingIntent(requestCode: Int, eventKey: String?): PendingIntent {
         return PendingIntent.getActivity(
             context,
@@ -129,6 +211,8 @@ class AgentBellNotificationManager(
     companion object {
         const val CONNECTION_CHANNEL_ID = "agentbell_connection"
         const val COMPLETED_CHANNEL_ID = "agentbell_codex_completed"
+        const val ACTION_REQUIRED_CHANNEL_ID = "agentbell_action_required"
+        const val ACTION_REQUIRED_IMPORTANCE = NotificationManager.IMPORTANCE_HIGH
         const val CONNECTION_NOTIFICATION_ID = 17863
         const val EXTRA_EVENT_KEY = "agentbell_event_key"
 
@@ -139,6 +223,24 @@ class AgentBellNotificationManager(
                 ((digest[1].toInt() and 0xff) shl 16) or
                 ((digest[2].toInt() and 0xff) shl 8) or
                 (digest[3].toInt() and 0xff)) and Int.MAX_VALUE
+        }
+
+        fun actionNotificationId(event: AgentEvent): Int = stableNotificationId(
+            "action-turn:${event.turnIdHash ?: stableEventKey(event.eventId)}",
+        )
+
+        fun shouldNotify(
+            event: AgentEvent,
+            preferences: NotificationPreferencesState,
+        ): Boolean = event.resolvedAt == null && when (event.actionType) {
+            AgentEventSemantics.ACTION_PERMISSION_REQUIRED ->
+                preferences.permissionNotificationPolicy ==
+                    PermissionNotificationPolicy.ALWAYS_NOTIFY
+            AgentEventSemantics.ACTION_INPUT_REQUIRED,
+            AgentEventSemantics.ACTION_CONFIRMATION_REQUIRED,
+            -> preferences.notifyActionRequired && preferences.replyAndConfirmationRequests
+            AgentEventSemantics.ACTION_ATTENTION_REQUIRED -> preferences.notifyActionRequired
+            else -> preferences.notifyTaskCompletion
         }
 
         fun stableEventKey(eventId: String): String = MessageDigest.getInstance("SHA-256")

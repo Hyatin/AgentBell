@@ -40,6 +40,7 @@ object MainUiProjection {
     }
 
     fun recentEvents(events: List<AgentEvent>): List<AgentEvent> = events
+        .filter { it.resolvedAt == null }
         .distinctBy { it.eventId }
         .sortedByDescending { it.sequence }
         .take(50)

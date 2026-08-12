@@ -8,7 +8,7 @@ namespace AgentBell.Integration.Tests;
 public sealed class HooksJsonManagerTests
 {
     [Fact]
-    public async Task Install_FileMissing_CreatesOneValidAgentBellStopHook()
+    public async Task Install_FileMissing_CreatesOneOfEachManagedHook()
     {
         using var directory = new TemporaryDirectory();
         var path = Path.Combine(directory.Path, "hooks.json");
@@ -24,6 +24,19 @@ public sealed class HooksJsonManagerTests
         Assert.Equal("command", handler!["type"]!.GetValue<string>());
         Assert.Equal(Commands.Command, handler["command"]!.GetValue<string>());
         Assert.Equal(Commands.CommandWindows, handler["commandWindows"]!.GetValue<string>());
+        var permissionHandler = Assert.Single(
+            Assert.Single(root["hooks"]!["PermissionRequest"]!.AsArray())!["hooks"]!.AsArray());
+        Assert.Equal(Commands.PermissionRequest.Command, permissionHandler!["command"]!.GetValue<string>());
+        Assert.Equal(
+            Commands.PermissionRequest.CommandWindows,
+            permissionHandler["commandWindows"]!.GetValue<string>());
+        var postToolUseHandler = Assert.Single(
+            Assert.Single(root["hooks"]!["PostToolUse"]!.AsArray())!["hooks"]!.AsArray());
+        Assert.Equal(Commands.PostToolUse.Command, postToolUseHandler!["command"]!.GetValue<string>());
+        Assert.Equal(
+            Commands.PostToolUse.CommandWindows,
+            postToolUseHandler["commandWindows"]!.GetValue<string>());
+        Assert.Equal(3, result.AgentBellHookCount);
     }
 
     [Fact]
@@ -85,7 +98,7 @@ public sealed class HooksJsonManagerTests
         Assert.True(result.TrustReviewRequired);
         var status = await Manager.StatusAsync(path, Commands, CancellationToken.None);
         Assert.Equal(CodexIntegrationState.Installed, status.State);
-        Assert.Equal(1, status.AgentBellHookCount);
+        Assert.Equal(3, status.AgentBellHookCount);
     }
 
     [Fact]
@@ -185,6 +198,9 @@ public sealed class HooksJsonManagerTests
             {"other":7,"hooks":{"Stop":[
               {"hooks":[{"type":"command","command":"other.exe"}]},
               {"hooks":[{"type":"command","command":"\"C:\\Users\\Test\\AppData\\Local\\Programs\\AgentBell\\AgentBell.Hook.exe\" --codex-stop-hook","commandWindows":"cmd.exe /d /s /c \"\"C:\\Users\\Test\\AppData\\Local\\Programs\\AgentBell\\AgentBell.Hook.exe\" --codex-stop-hook\"","timeout":3}]}
+            ],"PermissionRequest":[
+              {"hooks":[{"type":"command","command":"other-permission.exe"}]},
+              {"hooks":[{"type":"command","command":"\"C:\\Users\\Test\\AppData\\Local\\Programs\\AgentBell\\AgentBell.Hook.exe\" --codex-permission-request-hook","commandWindows":"cmd.exe /d /s /c \"\"C:\\Users\\Test\\AppData\\Local\\Programs\\AgentBell\\AgentBell.Hook.exe\" --codex-permission-request-hook\"","timeout":3}]}
             ],"PostToolUse":[]}}
             """);
 
@@ -195,6 +211,10 @@ public sealed class HooksJsonManagerTests
         Assert.Equal(7, root["other"]!.GetValue<int>());
         Assert.Single(root["hooks"]!["Stop"]!.AsArray());
         Assert.Equal("other.exe", root["hooks"]!["Stop"]![0]!["hooks"]![0]!["command"]!.GetValue<string>());
+        Assert.Single(root["hooks"]!["PermissionRequest"]!.AsArray());
+        Assert.Equal(
+            "other-permission.exe",
+            root["hooks"]!["PermissionRequest"]![0]!["hooks"]![0]!["command"]!.GetValue<string>());
         Assert.NotNull(root["hooks"]!["PostToolUse"]);
     }
 

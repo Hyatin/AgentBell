@@ -42,6 +42,7 @@ public static class CodexEventIngestion
 
         var stopwatch = Stopwatch.StartNew();
         EventAcceptanceResult? acceptance = null;
+        PermissionResolutionResult? resolution = null;
         var statusCode = StatusCodes.Status500InternalServerError;
         var persistenceSucceeded = true;
         try
@@ -74,22 +75,36 @@ public static class CodexEventIngestion
             }
 
             var parseResult = ParsePayload(readResult.Json!);
-            if (parseResult.Status == StopPayloadStatus.Invalid)
+            if (parseResult.Status == IngestionPayloadStatus.Invalid)
             {
                 statusCode = StatusCodes.Status400BadRequest;
                 return;
             }
 
-            if (parseResult.Status == StopPayloadStatus.Ignored)
+            if (parseResult.Status == IngestionPayloadStatus.Ignored)
             {
                 statusCode = StatusCodes.Status204NoContent;
                 return;
             }
 
-            acceptance = await pipeline.AcceptAsync(
-                parseResult.Payload!,
-                context.RequestAborted).ConfigureAwait(false);
-            persistenceSucceeded = acceptance.PersistenceSucceeded;
+            if (parseResult.PostToolUse is not null)
+            {
+                resolution = await pipeline.ResolveAsync(
+                    parseResult.PostToolUse,
+                    context.RequestAborted).ConfigureAwait(false);
+                persistenceSucceeded = resolution.PersistenceSucceeded;
+            }
+            else
+            {
+                acceptance = parseResult.ActionRequired is not null
+                    ? await pipeline.AcceptAsync(
+                        parseResult.ActionRequired,
+                        context.RequestAborted).ConfigureAwait(false)
+                    : await pipeline.AcceptAsync(
+                        parseResult.Stop!,
+                        context.RequestAborted).ConfigureAwait(false);
+                persistenceSucceeded = acceptance.PersistenceSucceeded;
+            }
             statusCode = StatusCodes.Status202Accepted;
         }
         catch (BadHttpRequestException exception)
@@ -115,6 +130,7 @@ public static class CodexEventIngestion
             TryRecordDiagnostic(
                 diagnosticLogger,
                 acceptance,
+                resolution,
                 statusCode,
                 persistenceSucceeded,
                 stopwatch.Elapsed);
@@ -177,7 +193,7 @@ public static class CodexEventIngestion
         }
     }
 
-    private static StopPayloadParseResult ParsePayload(string json)
+    private static IngestionPayloadParseResult ParsePayload(string json)
     {
         try
         {
@@ -186,34 +202,145 @@ public static class CodexEventIngestion
                 new JsonDocumentOptions { MaxDepth = 32 });
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
-                return new StopPayloadParseResult(StopPayloadStatus.Invalid, null);
+                return InvalidPayload();
+            }
+
+            if (document.RootElement.TryGetProperty("eventType", out var eventType))
+            {
+                if (eventType.ValueKind != JsonValueKind.String)
+                {
+                    return InvalidPayload();
+                }
+
+                var eventTypeValue = eventType.GetString();
+                if (string.Equals(
+                    eventTypeValue,
+                    SanitizedActionRequiredEvent.PermissionRequestEventType,
+                    StringComparison.Ordinal))
+                {
+                    var action = JsonSerializer.Deserialize<SanitizedActionRequiredEvent>(
+                        json,
+                        SerializerOptions);
+                    return action is not null && IsValidSanitizedPermissionRequest(action)
+                        ? new IngestionPayloadParseResult(
+                            IngestionPayloadStatus.Accepted,
+                            null,
+                            action,
+                            null)
+                        : InvalidPayload();
+                }
+
+                if (!string.Equals(
+                    eventTypeValue,
+                    SanitizedPostToolUseEvent.PostToolUseEventType,
+                    StringComparison.Ordinal))
+                {
+                    return IgnoredPayload();
+                }
+
+                var postToolUse = JsonSerializer.Deserialize<SanitizedPostToolUseEvent>(
+                    json,
+                    SerializerOptions);
+                return postToolUse is not null && IsValidSanitizedPostToolUse(postToolUse)
+                    ? new IngestionPayloadParseResult(
+                        IngestionPayloadStatus.Accepted,
+                        null,
+                        null,
+                        postToolUse)
+                    : InvalidPayload();
             }
 
             if (!document.RootElement.TryGetProperty("hook_event_name", out var eventName))
             {
-                return new StopPayloadParseResult(StopPayloadStatus.Ignored, null);
+                return IgnoredPayload();
             }
 
             if (eventName.ValueKind != JsonValueKind.String)
             {
-                return new StopPayloadParseResult(StopPayloadStatus.Invalid, null);
+                return InvalidPayload();
             }
 
             if (!string.Equals(eventName.GetString(), "Stop", StringComparison.Ordinal))
             {
-                return new StopPayloadParseResult(StopPayloadStatus.Ignored, null);
+                return IgnoredPayload();
             }
 
             var payload = JsonSerializer.Deserialize<CodexStopHookPayload>(json, SerializerOptions);
             return payload is null
-                ? new StopPayloadParseResult(StopPayloadStatus.Invalid, null)
-                : new StopPayloadParseResult(StopPayloadStatus.Accepted, payload);
+                ? InvalidPayload()
+                : new IngestionPayloadParseResult(
+                    IngestionPayloadStatus.Accepted,
+                    payload,
+                    null,
+                    null);
         }
         catch (JsonException)
         {
-            return new StopPayloadParseResult(StopPayloadStatus.Invalid, null);
+            return InvalidPayload();
         }
     }
+
+    private static bool IsValidSanitizedPermissionRequest(SanitizedActionRequiredEvent value) =>
+        value.EventType == SanitizedActionRequiredEvent.PermissionRequestEventType
+        && value.EventId.StartsWith("codex-action:", StringComparison.Ordinal)
+        && IsHex(value.EventId.AsSpan("codex-action:".Length), 24)
+        && IsOptionalHash(value.SessionIdHash)
+        && IsOptionalHash(value.TurnIdHash)
+        && IsOptionalHash(value.ToolUseIdHash)
+        && value.Category == AgentEventCategories.ActionRequired
+        && value.ActionType == AgentActionTypes.PermissionRequired
+        && IsAllowedToolCategory(value.ToolCategory)
+        && value.OccurredAt > DateTimeOffset.MinValue
+        && IsProjectBasename(value.Project);
+
+    private static bool IsValidSanitizedPostToolUse(SanitizedPostToolUseEvent value) =>
+        value.EventType == SanitizedPostToolUseEvent.PostToolUseEventType
+        && IsOptionalHash(value.SessionIdHash)
+        && IsOptionalHash(value.TurnIdHash)
+        && IsOptionalHash(value.ToolUseIdHash)
+        && IsAllowedToolCategory(value.ToolCategory)
+        && value.OccurredAt > DateTimeOffset.MinValue;
+
+    private static bool IsOptionalHash(string? value) =>
+        value is null || IsHex(value.AsSpan(), 12);
+
+    private static bool IsHex(ReadOnlySpan<char> value, int expectedLength)
+    {
+        if (value.Length != expectedLength)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!char.IsAsciiHexDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsAllowedToolCategory(string value) => value is
+        AgentToolCategories.Command
+        or AgentToolCategories.FileChange
+        or AgentToolCategories.NetworkAccess
+        or AgentToolCategories.ExternalTool
+        or AgentToolCategories.ComputerControl
+        or AgentToolCategories.Other;
+
+    private static bool IsProjectBasename(string? value) =>
+        value is null
+        || (value.Length is > 0 and <= 256
+            && value.IndexOfAny(['\\', '/', ':']) < 0
+            && value is not "." and not "..");
+
+    private static IngestionPayloadParseResult InvalidPayload() =>
+        new(IngestionPayloadStatus.Invalid, null, null, null);
+
+    private static IngestionPayloadParseResult IgnoredPayload() =>
+        new(IngestionPayloadStatus.Ignored, null, null, null);
 
     private static bool HasUtf8ByteOrderMark(byte[] buffer, int length) =>
         length >= 3
@@ -224,6 +351,7 @@ public static class CodexEventIngestion
     private static void TryRecordDiagnostic(
         IDesktopDiagnosticLogger logger,
         EventAcceptanceResult? acceptance,
+        PermissionResolutionResult? resolution,
         int statusCode,
         bool persistenceSucceeded,
         TimeSpan elapsed)
@@ -233,14 +361,46 @@ public static class CodexEventIngestion
             logger.Record(new DesktopDiagnosticEvent
             {
                 Timestamp = DateTimeOffset.UtcNow,
-                EventType = acceptance is null ? null : "codex-stop",
-                ThreadIdHash = acceptance?.Event.ThreadIdHash,
-                TurnIdHash = acceptance?.Event.TurnIdHash,
+                EventType = resolution is not null
+                    ? SanitizedPostToolUseEvent.PostToolUseEventType
+                    : acceptance is null
+                        ? null
+                    : acceptance.Event.ActionType == AgentActionTypes.PermissionRequired
+                        && acceptance.Event.ToolCategory != AgentToolCategories.None
+                            ? SanitizedActionRequiredEvent.PermissionRequestEventType
+                            : "codex-stop",
+                ThreadIdHash = acceptance?.Event.ActionType == AgentActionTypes.PermissionRequired
+                    ? null
+                    : acceptance?.Event.ThreadIdHash,
+                SessionIdHash = resolution?.SessionIdHash
+                    ?? (acceptance?.Event.ActionType == AgentActionTypes.PermissionRequired
+                        ? acceptance?.Event.ThreadIdHash
+                        : null),
+                TurnIdHash = resolution?.TurnIdHash ?? acceptance?.Event.TurnIdHash,
+                ToolCategory = resolution?.ToolCategory ?? acceptance?.Event.ToolCategory,
+                EventIdHash = acceptance is null
+                    ? null
+                    : IdentifierHash.CreateFingerprint(acceptance.Event.EventId),
+                ClassifiedAs = acceptance?.Event.ActionType,
+                MatchedRuleId = acceptance?.MatchedRuleId,
+                ConfidenceBand = acceptance?.ConfidenceBand,
                 IsDuplicate = acceptance?.IsDuplicate ?? false,
                 HttpStatusCode = statusCode,
                 ElapsedMilliseconds = Math.Max(0, (long)elapsed.TotalMilliseconds),
                 PersistenceSucceeded = persistenceSucceeded,
                 EventCount = acceptance?.EventCount ?? 0,
+                Result = resolution is null
+                    ? acceptance?.PermissionState switch
+                    {
+                        PermissionLifecycleState.Observed => "permission_observed_off",
+                        PermissionLifecycleState.Published => "permission_published",
+                        _ => null,
+                    }
+                    : resolution.Matched
+                        ? resolution.PublishedResolved > 0
+                            ? "resolved_published"
+                            : "resolved_observed"
+                        : "no_match",
             });
         }
         catch
@@ -257,7 +417,7 @@ public static class CodexEventIngestion
         InvalidUtf8,
     }
 
-    private enum StopPayloadStatus
+    private enum IngestionPayloadStatus
     {
         Accepted,
         Ignored,
@@ -266,7 +426,9 @@ public static class CodexEventIngestion
 
     private sealed record RequestBodyReadResult(RequestBodyStatus Status, string? Json);
 
-    private sealed record StopPayloadParseResult(
-        StopPayloadStatus Status,
-        CodexStopHookPayload? Payload);
+    private sealed record IngestionPayloadParseResult(
+        IngestionPayloadStatus Status,
+        CodexStopHookPayload? Stop,
+        SanitizedActionRequiredEvent? ActionRequired,
+        SanitizedPostToolUseEvent? PostToolUse);
 }

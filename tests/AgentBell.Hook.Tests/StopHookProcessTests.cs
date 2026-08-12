@@ -43,6 +43,79 @@ public sealed class StopHookProcessTests
     }
 
     [Fact]
+    public async Task PermissionRequestProcess_ValidInput_ExitsZeroAndIsCompletelySilent()
+    {
+        const string Json = """
+            {
+              "hook_event_name":"PermissionRequest",
+              "session_id":"test-session-reference",
+              "turn_id":"test-turn-reference",
+              "tool_use_id":"test-tool-reference",
+              "cwd":"C:\\TestRoot\\Project",
+              "tool_name":"Bash",
+              "tool_input":{"command":"<REDACTED_TEST_COMMAND>"}
+            }
+            """;
+
+        var result = await RunHookProcessAsync(
+            [HookInputResolver.CodexPermissionRequestHookOption],
+            Json,
+            diagnosticPath: null);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{")]
+    [InlineData("{\"hook_event_name\":\"Stop\"}")]
+    public async Task PermissionRequestProcess_InvalidInput_ExitsZeroAndIsCompletelySilent(
+        string stdin)
+    {
+        var result = await RunHookProcessAsync(
+            [HookInputResolver.CodexPermissionRequestHookOption],
+            stdin,
+            diagnosticPath: null);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
+    public async Task PermissionRequestProcess_OversizedInput_ExitsZeroAndIsCompletelySilent()
+    {
+        var oversized = new string('x', HookInputResolver.MaxInputBytes + 1);
+
+        var result = await RunHookProcessAsync(
+            [HookInputResolver.CodexPermissionRequestHookOption],
+            oversized,
+            diagnosticPath: null);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Theory]
+    [InlineData("{\"hook_event_name\":\"PostToolUse\",\"turn_id\":\"turn\",\"tool_use_id\":\"tool\",\"tool_name\":\"Bash\"}")]
+    [InlineData("{")]
+    [InlineData("")]
+    public async Task PostToolUseProcess_AlwaysExitsZeroAndIsCompletelySilent(string stdin)
+    {
+        var result = await RunHookProcessAsync(
+            [HookInputResolver.CodexPostToolUseHookOption],
+            stdin,
+            diagnosticPath: null);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+    }
+
+    [Fact]
     public async Task StopHookProcess_SameIdsAcrossProcesses_ProducesStablePrivateHashes()
     {
         const string Json = """

@@ -32,6 +32,32 @@ public sealed record AgentBellConfiguration
     [JsonPropertyName("language")]
     public string Language { get; init; } = AppLanguageValues.System;
 
+    /// <summary>Gets whether Windows displays task-completion notifications.</summary>
+    [JsonPropertyName("notifyTaskCompletion")]
+    public bool NotifyTaskCompletion { get; init; } = true;
+
+    /// <summary>Gets whether Windows displays action-required notifications.</summary>
+    [JsonPropertyName("notifyActionRequired")]
+    public bool NotifyActionRequired { get; init; } = true;
+
+    /// <summary>Gets the explicit persisted PermissionRequest occurrence policy.</summary>
+    [JsonPropertyName("permissionNotificationPolicy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PermissionNotificationPolicy { get; init; }
+
+    /// <summary>Gets the obsolete boolean solely so older configurations can migrate safely.</summary>
+    [JsonPropertyName("notifyPermissionRequests")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyNotifyPermissionRequests { get; init; }
+
+    /// <summary>Gets whether Windows displays reply and confirmation notifications.</summary>
+    [JsonPropertyName("notifyReplyAndConfirmationRequests")]
+    public bool NotifyReplyAndConfirmationRequests { get; init; } = true;
+
+    /// <summary>Gets whether Stop responses are conservatively classified.</summary>
+    [JsonPropertyName("detectQuestionsInCompletedResponses")]
+    public bool DetectQuestionsInCompletedResponses { get; init; } = true;
+
     /// <summary>Gets when the configuration was first created.</summary>
     [JsonPropertyName("createdAt")]
     public DateTimeOffset CreatedAt { get; init; }
@@ -96,6 +122,11 @@ public sealed class PairingConfigurationManager
                 ? (int?)port
                 : null;
             var language = AppLanguageValues.Normalize(existing?.Language);
+            var permissionNotificationPolicy =
+                PermissionNotificationPolicyValues.IsSupported(
+                    existing?.PermissionNotificationPolicy)
+                    ? existing!.PermissionNotificationPolicy!
+                    : PermissionNotificationPolicyValues.Off;
             var needsSave = existing is null
                 || load.CorruptFileRecovered
                 || tokenWasRegenerated
@@ -104,6 +135,11 @@ public sealed class PairingConfigurationManager
                 || !string.Equals(existing.DeviceName, deviceName, StringComparison.Ordinal)
                 || existing.LastLanPort != lastLanPort
                 || !string.Equals(existing.Language, language, StringComparison.Ordinal)
+                || existing.LegacyNotifyPermissionRequests is not null
+                || !string.Equals(
+                    existing.PermissionNotificationPolicy,
+                    permissionNotificationPolicy,
+                    StringComparison.Ordinal)
                 || existing.UpdatedAt <= DateTimeOffset.MinValue;
 
             var protectedToken = existing?.EncryptedPairingToken;
@@ -121,6 +157,14 @@ public sealed class PairingConfigurationManager
                 EncryptedPairingToken = protectedToken,
                 LastLanPort = lastLanPort,
                 Language = language,
+                NotifyTaskCompletion = existing?.NotifyTaskCompletion ?? true,
+                NotifyActionRequired = existing?.NotifyActionRequired ?? true,
+                PermissionNotificationPolicy = permissionNotificationPolicy,
+                LegacyNotifyPermissionRequests = null,
+                NotifyReplyAndConfirmationRequests =
+                    existing?.NotifyReplyAndConfirmationRequests ?? true,
+                DetectQuestionsInCompletedResponses =
+                    existing?.DetectQuestionsInCompletedResponses ?? true,
                 CreatedAt = createdAt,
                 UpdatedAt = needsSave ? now : existing!.UpdatedAt,
             };
@@ -316,6 +360,43 @@ public sealed class PairingConfigurationSession : IDisposable
         Configuration = updated;
         return true;
     }
+
+    /// <summary>Persists local notification settings without changing pairing credentials.</summary>
+    public async Task<bool> UpdateNotificationSettingsAsync(
+        DesktopNotificationSettings settings,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var updated = Configuration with
+        {
+            NotifyTaskCompletion = settings.NotifyTaskCompletion,
+            NotifyActionRequired = settings.NotifyActionRequired,
+            PermissionNotificationPolicy = PermissionNotificationPolicyValues.ToPersistedValue(
+                settings.PermissionNotificationPolicy),
+            LegacyNotifyPermissionRequests = null,
+            NotifyReplyAndConfirmationRequests = settings.NotifyReplyAndConfirmationRequests,
+            DetectQuestionsInCompletedResponses = settings.DetectQuestionsInCompletedResponses,
+            UpdatedAt = _timeProvider.GetUtcNow(),
+        };
+        if (!await _store.SaveAsync(updated, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        Configuration = updated;
+        return true;
+    }
+
+    /// <summary>Projects the persisted notification flags.</summary>
+    public DesktopNotificationSettings GetNotificationSettings() => new()
+    {
+        NotifyTaskCompletion = Configuration.NotifyTaskCompletion,
+        NotifyActionRequired = Configuration.NotifyActionRequired,
+        PermissionNotificationPolicy = PermissionNotificationPolicyValues.Parse(
+            Configuration.PermissionNotificationPolicy),
+        NotifyReplyAndConfirmationRequests = Configuration.NotifyReplyAndConfirmationRequests,
+        DetectQuestionsInCompletedResponses = Configuration.DetectQuestionsInCompletedResponses,
+    };
 
     /// <inheritdoc />
     public void Dispose() => Token.Dispose();

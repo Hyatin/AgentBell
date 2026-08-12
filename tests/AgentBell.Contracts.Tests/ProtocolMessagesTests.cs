@@ -30,7 +30,7 @@ public sealed class ProtocolMessagesTests
 
         Assert.Equal("hello", helloDocument.RootElement.GetProperty("type").GetString());
         Assert.Equal(1, helloDocument.RootElement.GetProperty("protocolVersion").GetInt32());
-        Assert.Equal("0.6.0-beta.1", helloDocument.RootElement.GetProperty("serverVersion").GetString());
+        Assert.Equal("0.7.0-beta.1", helloDocument.RootElement.GetProperty("serverVersion").GetString());
         Assert.Equal(AgentBellProtocol.WebSocketPath,
             statusDocument.RootElement.GetProperty("webSocketPath").GetString());
         Assert.False(statusDocument.RootElement.TryGetProperty("token", out _));

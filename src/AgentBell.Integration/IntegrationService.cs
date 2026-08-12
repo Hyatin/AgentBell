@@ -138,7 +138,7 @@ public sealed class IntegrationService
         var status = await _hooksManager.StatusAsync(hooksPath, commands, cancellationToken)
             .ConfigureAwait(false);
         return status.State == CodexIntegrationState.Installed
-            && status.AgentBellHookCount == 1
+            && status.AgentBellHookCount == commands.All.Count
             ? status with
             {
                 Success = true,

@@ -57,6 +57,30 @@ public static class HookErrorCodes
     /// <summary>The command Hook event is not the supported Stop event.</summary>
     public const string UnsupportedHookEvent = "unsupported_hook_event";
 
+    /// <summary>The PermissionRequest Hook option included unexpected arguments.</summary>
+    public const string PermissionHookArgumentsInvalid = "permission_hook_arguments_invalid";
+
+    /// <summary>The PermissionRequest Hook standard input was empty.</summary>
+    public const string PermissionHookEmptyInput = "permission_hook_empty_input";
+
+    /// <summary>The PermissionRequest Hook input exceeded one MiB.</summary>
+    public const string PermissionHookInputTooLarge = "permission_hook_input_too_large";
+
+    /// <summary>The PermissionRequest Hook input was not valid UTF-8.</summary>
+    public const string PermissionHookInvalidUtf8 = "permission_hook_invalid_utf8";
+
+    /// <summary>The PostToolUse Hook option included unexpected arguments.</summary>
+    public const string PostToolUseHookArgumentsInvalid = "post_tool_use_hook_arguments_invalid";
+
+    /// <summary>The PostToolUse Hook standard input was empty.</summary>
+    public const string PostToolUseHookEmptyInput = "post_tool_use_hook_empty_input";
+
+    /// <summary>The PostToolUse Hook input exceeded one MiB.</summary>
+    public const string PostToolUseHookInputTooLarge = "post_tool_use_hook_input_too_large";
+
+    /// <summary>The PostToolUse Hook input was not valid UTF-8.</summary>
+    public const string PostToolUseHookInvalidUtf8 = "post_tool_use_hook_invalid_utf8";
+
     /// <summary>The local forward operation exceeded its deadline.</summary>
     public const string ForwardTimeout = "forward_timeout";
 

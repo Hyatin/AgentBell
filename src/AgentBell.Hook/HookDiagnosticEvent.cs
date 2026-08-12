@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Serialization;
 using AgentBell.Contracts;
 
@@ -20,6 +18,10 @@ public sealed record HookDiagnosticEvent
     [JsonPropertyName("threadIdHash")]
     public string? ThreadIdHash { get; init; }
 
+    /// <summary>Gets the session hash for a PermissionRequest event.</summary>
+    [JsonPropertyName("sessionIdHash")]
+    public string? SessionIdHash { get; init; }
+
     /// <summary>Gets a truncated SHA-256 reference for the turn identifier.</summary>
     [JsonPropertyName("turnIdHash")]
     public string? TurnIdHash { get; init; }
@@ -31,6 +33,14 @@ public sealed record HookDiagnosticEvent
     /// <summary>Gets whether an assistant message was present, without storing its contents.</summary>
     [JsonPropertyName("hasAssistantMessage")]
     public bool HasAssistantMessage { get; init; }
+
+    /// <summary>Gets the allow-listed tool category.</summary>
+    [JsonPropertyName("toolCategory")]
+    public string? ToolCategory { get; init; }
+
+    /// <summary>Gets a fingerprint of the already-sanitized event identifier.</summary>
+    [JsonPropertyName("eventIdHash")]
+    public string? EventIdHash { get; init; }
 
     /// <summary>Gets the stable processing result.</summary>
     [JsonPropertyName("result")]
@@ -63,23 +73,25 @@ public sealed record HookDiagnosticEvent
         {
             Timestamp = DateTimeOffset.Now,
             EventType = metadata?.EventType,
-            ThreadIdHash = HashIdentifier(metadata?.ThreadId),
-            TurnIdHash = HashIdentifier(metadata?.TurnId),
+            ThreadIdHash = IsSessionScopedLifecycle(metadata?.EventType)
+                ? null
+                : IdentifierHash.Create(metadata?.ThreadId),
+            SessionIdHash = IsSessionScopedLifecycle(metadata?.EventType)
+                ? IdentifierHash.Create(metadata?.ThreadId)
+                : null,
+            TurnIdHash = IdentifierHash.Create(metadata?.TurnId),
             HasWorkingDirectory = !string.IsNullOrWhiteSpace(metadata?.WorkingDirectory),
             HasAssistantMessage = !string.IsNullOrWhiteSpace(metadata?.LastAssistantMessage),
+            ToolCategory = metadata?.ToolCategory,
+            EventIdHash = string.IsNullOrWhiteSpace(metadata?.EventId)
+                ? null
+                : IdentifierHash.CreateFingerprint(metadata.EventId),
             Result = result.Code,
             HttpStatusCode = result.HttpStatusCode,
             ElapsedMilliseconds = Math.Max(0, (long)elapsed.TotalMilliseconds),
         };
 
-    private static string? HashIdentifier(string? identifier)
-    {
-        if (string.IsNullOrWhiteSpace(identifier))
-        {
-            return null;
-        }
-
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(identifier));
-        return Convert.ToHexString(bytes.AsSpan(0, 6)).ToLowerInvariant();
-    }
+    private static bool IsSessionScopedLifecycle(string? eventType) => eventType is
+        SanitizedActionRequiredEvent.PermissionRequestEventType
+        or SanitizedPostToolUseEvent.PostToolUseEventType;
 }

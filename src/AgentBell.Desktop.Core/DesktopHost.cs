@@ -22,7 +22,9 @@ public static class DesktopHost
     public static WebApplication Build(
         DesktopRuntimeOptions? runtimeOptions = null,
         IEventPublisher? eventPublisher = null,
-        IDesktopDiagnosticLogger? diagnosticLogger = null)
+        IDesktopDiagnosticLogger? diagnosticLogger = null,
+        DesktopNotificationSettingsState? notificationSettings = null,
+        TimeProvider? timeProvider = null)
     {
         runtimeOptions ??= DesktopRuntimeOptions.CreateDefault();
         runtimeOptions.Validate();
@@ -45,7 +47,15 @@ public static class DesktopHost
             new JsonEventStore(services.GetRequiredService<DesktopRuntimeOptions>().EventsFilePath));
         builder.Services.AddSingleton<CodexEventTransformer>();
         builder.Services.AddSingleton(eventPublisher ?? NoOpEventPublisher.Instance);
-        builder.Services.AddSingleton<EventPipeline>();
+        builder.Services.AddSingleton(notificationSettings ?? new DesktopNotificationSettingsState());
+        builder.Services.AddSingleton(timeProvider ?? TimeProvider.System);
+        builder.Services.AddSingleton<CodexActionRequestClassifier>();
+        builder.Services.AddSingleton<EventPipeline>(services => new EventPipeline(
+            services.GetRequiredService<IEventStore>(),
+            services.GetRequiredService<CodexEventTransformer>(),
+            services.GetRequiredService<IEventPublisher>(),
+            services.GetRequiredService<TimeProvider>(),
+            services.GetRequiredService<DesktopNotificationSettingsState>()));
         builder.Services.AddSingleton(
             diagnosticLogger ?? DesktopDiagnosticLoggerFactory.CreateFromEnvironment());
 

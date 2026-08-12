@@ -6,7 +6,7 @@ on:
       version:
         description: Release version without v prefix
         required: true
-        default: 0.6.0-beta.1
+        default: 0.7.0-beta.1
       dry_run:
         description: Build and validate without creating a GitHub Release
         required: true

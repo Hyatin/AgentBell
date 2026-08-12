@@ -33,6 +33,12 @@ public enum HookInputMode
 
     /// <summary>Codex Stop command Hook JSON read from standard input.</summary>
     CodexStopHook,
+
+    /// <summary>Codex PermissionRequest command Hook JSON read from standard input.</summary>
+    CodexPermissionRequestHook,
+
+    /// <summary>Codex PostToolUse command Hook JSON read from standard input.</summary>
+    CodexPostToolUseHook,
 }
 
 /// <summary>
@@ -45,6 +51,12 @@ public sealed class HookInputResolver : IHookInputResolver
 
     /// <summary>The production command-line option for reading a Codex Stop Hook object from standard input.</summary>
     public const string CodexStopHookOption = "--codex-stop-hook";
+
+    /// <summary>The production option for a Codex PermissionRequest Hook on standard input.</summary>
+    public const string CodexPermissionRequestHookOption = "--codex-permission-request-hook";
+
+    /// <summary>The production option for a Codex PostToolUse Hook on standard input.</summary>
+    public const string CodexPostToolUseHookOption = "--codex-post-tool-use-hook";
 
     /// <summary>The maximum number of UTF-8 bytes accepted from a file or standard input.</summary>
     public const int MaxInputBytes = 1024 * 1024;
@@ -64,6 +76,50 @@ public sealed class HookInputResolver : IHookInputResolver
     {
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentNullException.ThrowIfNull(standardInput);
+
+        if (arguments.Count > 0
+            && string.Equals(
+                arguments[0],
+                CodexPostToolUseHookOption,
+                StringComparison.Ordinal))
+        {
+            if (arguments.Count != 1)
+            {
+                return Failure(
+                    HookErrorCodes.PostToolUseHookArgumentsInvalid,
+                    HookInputMode.CodexPostToolUseHook);
+            }
+
+            return await ReadUtf8JsonAsync(
+                standardInput,
+                HookInputMode.CodexPostToolUseHook,
+                HookErrorCodes.PostToolUseHookEmptyInput,
+                HookErrorCodes.PostToolUseHookInputTooLarge,
+                HookErrorCodes.PostToolUseHookInvalidUtf8,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (arguments.Count > 0
+            && string.Equals(
+                arguments[0],
+                CodexPermissionRequestHookOption,
+                StringComparison.Ordinal))
+        {
+            if (arguments.Count != 1)
+            {
+                return Failure(
+                    HookErrorCodes.PermissionHookArgumentsInvalid,
+                    HookInputMode.CodexPermissionRequestHook);
+            }
+
+            return await ReadUtf8JsonAsync(
+                standardInput,
+                HookInputMode.CodexPermissionRequestHook,
+                HookErrorCodes.PermissionHookEmptyInput,
+                HookErrorCodes.PermissionHookInputTooLarge,
+                HookErrorCodes.PermissionHookInvalidUtf8,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         if (arguments.Count > 0
             && string.Equals(arguments[0], CodexStopHookOption, StringComparison.Ordinal))

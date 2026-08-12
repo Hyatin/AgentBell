@@ -27,6 +27,10 @@ public sealed record DesktopDiagnosticEvent
     [JsonPropertyName("threadIdHash")]
     public string? ThreadIdHash { get; init; }
 
+    /// <summary>Gets a truncated PermissionRequest session hash when available.</summary>
+    [JsonPropertyName("sessionIdHash")]
+    public string? SessionIdHash { get; init; }
+
     /// <summary>Gets a truncated turn hash, when available.</summary>
     [JsonPropertyName("turnIdHash")]
     public string? TurnIdHash { get; init; }
@@ -50,6 +54,26 @@ public sealed record DesktopDiagnosticEvent
     /// <summary>Gets the current recent-event count.</summary>
     [JsonPropertyName("eventCount")]
     public int EventCount { get; init; }
+
+    /// <summary>Gets the allow-listed tool category.</summary>
+    [JsonPropertyName("toolCategory")]
+    public string? ToolCategory { get; init; }
+
+    /// <summary>Gets a fingerprint of the sanitized event identifier.</summary>
+    [JsonPropertyName("eventIdHash")]
+    public string? EventIdHash { get; init; }
+
+    /// <summary>Gets the classifier result without source text.</summary>
+    [JsonPropertyName("classifiedAs")]
+    public string? ClassifiedAs { get; init; }
+
+    /// <summary>Gets the stable matched rule identifier without source text.</summary>
+    [JsonPropertyName("matchedRuleId")]
+    public string? MatchedRuleId { get; init; }
+
+    /// <summary>Gets the classifier confidence band.</summary>
+    [JsonPropertyName("confidenceBand")]
+    public string? ConfidenceBand { get; init; }
 
     /// <summary>Gets a random short connection identifier, never a client address.</summary>
     [JsonPropertyName("connectionId")]

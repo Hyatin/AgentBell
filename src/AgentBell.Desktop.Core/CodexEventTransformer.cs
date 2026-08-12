@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text;
 using AgentBell.Contracts;
 
@@ -12,47 +11,85 @@ public sealed class CodexEventTransformer
     public const int MaxSummaryTextElements = 160;
 
     private readonly TimeProvider _timeProvider;
+    private readonly CodexActionRequestClassifier _classifier;
+    private readonly DesktopNotificationSettingsState _settings;
 
     /// <summary>Initializes a transformer using the system clock unless another clock is supplied.</summary>
-    public CodexEventTransformer(TimeProvider? timeProvider = null)
+    public CodexEventTransformer(
+        TimeProvider? timeProvider = null,
+        CodexActionRequestClassifier? classifier = null,
+        DesktopNotificationSettingsState? settings = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _classifier = classifier ?? new CodexActionRequestClassifier();
+        _settings = settings ?? new DesktopNotificationSettingsState();
     }
 
     /// <summary>Creates a sanitized event candidate. The pipeline assigns its final sequence.</summary>
     public AgentEvent Transform(CodexStopHookPayload payload)
+        => TransformWithClassification(payload).Event;
+
+    /// <summary>Creates a sanitized event and content-free classifier metadata.</summary>
+    public ClassifiedAgentEvent TransformWithClassification(CodexStopHookPayload payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
         var threadIdHash = HashIdentifier(payload.SessionId);
         var turnIdHash = HashIdentifier(payload.TurnId);
+        var classification = _settings.Current.DetectQuestionsInCompletedResponses
+            ? _classifier.Classify(payload.LastAssistantMessage)
+            : ActionClassification.Completed;
+        var isActionRequired = classification.IsActionRequired;
+
+        return new ClassifiedAgentEvent(
+            new AgentEvent
+            {
+                EventId = CreateEventId(threadIdHash, turnIdHash, classification.ActionType),
+                Agent = "codex",
+                Status = isActionRequired ? "action_required" : "completed",
+                Category = isActionRequired
+                ? AgentEventCategories.ActionRequired
+                : AgentEventCategories.Completion,
+                ActionType = classification.ActionType,
+                ToolCategory = AgentToolCategories.None,
+                Title = isActionRequired ? "Codex action required" : "Codex turn completed",
+                Project = ExtractProject(payload.WorkingDirectory),
+                Summary = isActionRequired ? null : CreateSummary(payload.LastAssistantMessage),
+                ThreadIdHash = threadIdHash,
+                TurnIdHash = turnIdHash,
+                OccurredAt = _timeProvider.GetUtcNow(),
+                Sequence = 0,
+            },
+            classification.MatchedRuleId,
+            classification.ConfidenceBand);
+    }
+
+    /// <summary>Creates an AgentEvent from the content-free PermissionRequest contract.</summary>
+    public AgentEvent Transform(SanitizedActionRequiredEvent payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
 
         return new AgentEvent
         {
-            EventId = CreateEventId(threadIdHash, turnIdHash),
+            EventId = payload.EventId,
             Agent = "codex",
-            Status = "completed",
-            Title = "Codex 已完成当前回合",
-            Project = ExtractProject(payload.WorkingDirectory),
-            Summary = CreateSummary(payload.LastAssistantMessage),
-            ThreadIdHash = threadIdHash,
-            TurnIdHash = turnIdHash,
-            OccurredAt = _timeProvider.GetUtcNow(),
+            Status = "action_required",
+            Category = AgentEventCategories.ActionRequired,
+            ActionType = AgentActionTypes.PermissionRequired,
+            ToolCategory = payload.ToolCategory,
+            Title = "Codex action required",
+            Project = payload.Project,
+            Summary = null,
+            ThreadIdHash = payload.SessionIdHash,
+            TurnIdHash = payload.TurnIdHash,
+            ToolUseIdHash = payload.ToolUseIdHash,
+            OccurredAt = payload.OccurredAt,
             Sequence = 0,
         };
     }
 
     /// <summary>Returns a deterministic 12-character SHA-256 reference without a random salt.</summary>
-    public static string? HashIdentifier(string? identifier)
-    {
-        if (string.IsNullOrWhiteSpace(identifier))
-        {
-            return null;
-        }
-
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(identifier));
-        return Convert.ToHexString(bytes.AsSpan(0, 6)).ToLowerInvariant();
-    }
+    public static string? HashIdentifier(string? identifier) => IdentifierHash.Create(identifier);
 
     /// <summary>Extracts only the final directory segment from an untrusted path-like value.</summary>
     public static string? ExtractProject(string? workingDirectory)
@@ -101,8 +138,21 @@ public sealed class CodexEventTransformer
         return builder.ToString();
     }
 
-    private static string CreateEventId(string? threadIdHash, string? turnIdHash)
+    private static string CreateEventId(
+        string? threadIdHash,
+        string? turnIdHash,
+        string actionType)
     {
+        if (actionType != AgentActionTypes.None)
+        {
+            return $"codex-action:{IdentifierHash.CreateFingerprint(string.Join(
+                '|',
+                "codex-stop",
+                threadIdHash ?? "missing-session",
+                turnIdHash ?? "missing-turn",
+                actionType))}";
+        }
+
         if (threadIdHash is not null && turnIdHash is not null)
         {
             return $"codex:{threadIdHash}:{turnIdHash}";
@@ -141,3 +191,9 @@ public sealed class CodexEventTransformer
         return builder.ToString();
     }
 }
+
+/// <summary>Pairs a sanitized event with classifier metadata that contains no source text.</summary>
+public sealed record ClassifiedAgentEvent(
+    AgentEvent Event,
+    string? MatchedRuleId,
+    string ConfidenceBand);

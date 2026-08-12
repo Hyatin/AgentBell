@@ -1,8 +1,8 @@
 <Project>
   <PropertyGroup>
-    <AgentBellProductVersion>0.6.0</AgentBellProductVersion>
-    <AgentBellInformationalVersion>0.6.0-beta.1</AgentBellInformationalVersion>
-    <AgentBellAndroidVersionCode>6</AgentBellAndroidVersionCode>
+    <AgentBellProductVersion>0.7.0</AgentBellProductVersion>
+    <AgentBellInformationalVersion>0.7.0-beta.1</AgentBellInformationalVersion>
+    <AgentBellAndroidVersionCode>7</AgentBellAndroidVersionCode>
     <Version>$(AgentBellInformationalVersion)</Version>
     <VersionPrefix>$(AgentBellProductVersion)</VersionPrefix>
     <VersionSuffix>beta.1</VersionSuffix>

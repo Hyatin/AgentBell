@@ -32,11 +32,46 @@ data class AgentEvent(
     val agent: String,
     val status: String,
     val title: String,
+    val category: String = AgentEventSemantics.CATEGORY_COMPLETION,
+    val actionType: String = AgentEventSemantics.ACTION_NONE,
+    val toolCategory: String = AgentEventSemantics.TOOL_NONE,
     val project: String?,
     val summary: String?,
+    val threadIdHash: String? = null,
+    val turnIdHash: String? = null,
+    val toolUseIdHash: String? = null,
     val occurredAt: String,
     val sequence: Long,
+    val resolvedAt: String? = null,
 )
+
+object AgentEventSemantics {
+    const val CATEGORY_COMPLETION = "completion"
+    const val CATEGORY_ACTION_REQUIRED = "action_required"
+    const val ACTION_NONE = "none"
+    const val ACTION_PERMISSION_REQUIRED = "permission_required"
+    const val ACTION_INPUT_REQUIRED = "input_required"
+    const val ACTION_CONFIRMATION_REQUIRED = "confirmation_required"
+    const val ACTION_ATTENTION_REQUIRED = "attention_required"
+    const val TOOL_NONE = "none"
+
+    val ACTION_TYPES = setOf(
+        ACTION_NONE,
+        ACTION_PERMISSION_REQUIRED,
+        ACTION_INPUT_REQUIRED,
+        ACTION_CONFIRMATION_REQUIRED,
+        ACTION_ATTENTION_REQUIRED,
+    )
+    val TOOL_CATEGORIES = setOf(
+        TOOL_NONE,
+        "command",
+        "file_change",
+        "network_access",
+        "external_tool",
+        "computer_control",
+        "other",
+    )
+}
 
 sealed interface ProtocolParseResult {
     data class Success(val message: ServerMessage) : ProtocolParseResult
@@ -115,6 +150,20 @@ object ProtocolMessageCodec {
         val sequence = payload.strictLong("sequence")
             ?: return ProtocolParseResult.Invalid("invalid_event")
         if (sequence <= 0) return ProtocolParseResult.Invalid("invalid_event")
+        val category = payload.optionalString("category", 32)
+            ?: AgentEventSemantics.CATEGORY_COMPLETION
+        val actionType = payload.optionalString("actionType", 32)
+            ?: AgentEventSemantics.ACTION_NONE
+        val toolCategory = payload.optionalString("toolCategory", 32)
+            ?: AgentEventSemantics.TOOL_NONE
+        if (category !in setOf(
+                AgentEventSemantics.CATEGORY_COMPLETION,
+                AgentEventSemantics.CATEGORY_ACTION_REQUIRED,
+            ) || actionType !in AgentEventSemantics.ACTION_TYPES ||
+            toolCategory !in AgentEventSemantics.TOOL_CATEGORIES
+        ) {
+            return ProtocolParseResult.Invalid("invalid_event")
+        }
 
         return ProtocolParseResult.Success(
             ServerMessage.Event(
@@ -123,10 +172,17 @@ object ProtocolMessageCodec {
                     agent = agent,
                     status = status,
                     title = title,
+                    category = category,
+                    actionType = actionType,
+                    toolCategory = toolCategory,
                     project = payload.optionalString("project", 256),
                     summary = payload.optionalString("summary", 1024),
+                    threadIdHash = payload.optionalHash("threadIdHash"),
+                    turnIdHash = payload.optionalHash("turnIdHash"),
+                    toolUseIdHash = payload.optionalHash("toolUseIdHash"),
                     occurredAt = occurredAt,
                     sequence = sequence,
+                    resolvedAt = payload.optionalString("resolvedAt", 64),
                 ),
             ),
         )
@@ -154,6 +210,14 @@ object ProtocolMessageCodec {
         if (!has(name) || isNull(name)) return null
         return strictString(name, maximumLength)
     }
+
+    private fun JSONObject.optionalHash(name: String): String? {
+        val value = optionalString(name, 12) ?: return null
+        return value.takeIf { it.length == 12 && it.all { character -> character.isHexDigit() } }
+    }
+
+    private fun Char.isHexDigit(): Boolean =
+        this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'
 
     private fun JSONObject.strictLong(name: String): Long? = when (val value = opt(name)) {
         is Byte -> value.toLong()

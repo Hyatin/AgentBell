@@ -13,4 +13,8 @@
     <ProjectReference Include="..\AgentBell.Integration\AgentBell.Integration.csproj" />
     <ProjectReference Include="..\AgentBell.Localization\AgentBell.Localization.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AgentBell.Tray.Tests" />
+  </ItemGroup>
 </Project>

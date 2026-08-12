@@ -29,6 +29,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private MainForm? _mainForm;
     private Task _startupTask;
     private long? _lastObservedSequence;
+    private string? _lastBalloonEventId;
     private bool _exiting;
 
     /// <summary>Initializes the per-user Tray context after culture has been selected.</summary>
@@ -65,6 +66,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             Visible = true,
         };
         _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
+        _notifyIcon.BalloonTipClicked += (_, _) => ShowMainWindow(_lastBalloonEventId);
         RebuildMenu();
 
         _refreshTimer = new System.Windows.Forms.Timer { Interval = 2000 };
@@ -111,6 +113,22 @@ public sealed class TrayApplicationContext : ApplicationContext
         RebuildMenu();
         _mainForm?.ApplyLanguage();
         await RefreshMenuAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Persists local notification settings without changing event synchronization.</summary>
+    public async Task SetNotificationSettingsAsync(DesktopNotificationSettings settings)
+    {
+        await _startupTask.ConfigureAwait(true);
+        if (!await _runtime.UpdateNotificationSettingsAsync(
+                settings,
+                CancellationToken.None).ConfigureAwait(true))
+        {
+            MessageBox.Show(
+                Localizer.Get("Settings_SaveNotificationsFailed"),
+                "AgentBell",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
     }
 
     /// <summary>Posts a bounded single-instance IPC command onto the UI thread.</summary>
@@ -321,7 +339,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         await RefreshMenuAsync().ConfigureAwait(true);
     }
 
-    private void ShowMainWindow()
+    private void ShowMainWindow(string? eventId = null)
     {
         _mainForm ??= new MainForm(this);
         if (!_mainForm.Visible)
@@ -336,6 +354,10 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _mainForm.Activate();
         _mainForm.BeginRefresh();
+        if (!string.IsNullOrWhiteSpace(eventId))
+        {
+            _mainForm.SelectEvent(eventId);
+        }
     }
 
     private async Task RefreshMenuAsync()
@@ -355,11 +377,12 @@ public sealed class TrayApplicationContext : ApplicationContext
                 snapshot.LastEventTime.Value.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture));
         _startupItem.Checked = _startup.Status().State == StartupRegistrationState.Enabled;
         _notifyIcon.Text = Localizer.Format("Tray_Tooltip", localStatus);
-        ShowCompletionNotificationIfNew(snapshot.LatestSequence);
+        ShowNotificationsIfNew(snapshot);
     }
 
-    private void ShowCompletionNotificationIfNew(long latestSequence)
+    private void ShowNotificationsIfNew(AgentBellRuntimeSnapshot snapshot)
     {
+        var latestSequence = snapshot.LatestSequence;
         if (_lastObservedSequence is null || latestSequence < _lastObservedSequence.Value)
         {
             _lastObservedSequence = latestSequence;
@@ -371,13 +394,28 @@ public sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
+        var pending = snapshot.RecentEvents
+            .Where(item => item.Sequence > _lastObservedSequence.Value)
+            .OrderBy(item => item.Sequence)
+            .ToArray();
         _lastObservedSequence = latestSequence;
-        var notification = WindowsNotificationProjection.Create(Localizer);
-        _notifyIcon.ShowBalloonTip(
-            timeout: 5000,
-            notification.Title,
-            notification.Body,
-            ToolTipIcon.Info);
+        foreach (var agentEvent in pending)
+        {
+            if (!WindowsNotificationProjection.ShouldNotify(
+                agentEvent,
+                snapshot.NotificationSettings))
+            {
+                continue;
+            }
+
+            _lastBalloonEventId = agentEvent.EventId;
+            var notification = WindowsNotificationProjection.Create(Localizer, agentEvent);
+            _notifyIcon.ShowBalloonTip(
+                timeout: 5000,
+                notification.Title,
+                notification.Body,
+                ToolTipIcon.Info);
+        }
     }
 
     private Task ToggleStartupAsync()

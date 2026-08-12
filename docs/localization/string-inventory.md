@@ -14,6 +14,7 @@ The inventory was taken before migration from the 0.5 source tree. Logs, protoco
 | `PairingUrlDisclosurePolicy.cs` | pairing URL credential warning | Yes | `Pairing_UrlDisclosureWarning` | Matching resource | URL, Token concepts |
 | `TrayStatusProjection.cs` | enum `ToString()` values | Yes | `Common_*`, `Status_Integration*` | Localized at projection boundary | enums stay unchanged internally |
 | Windows completion balloon | generic completion title and body | Yes | `WindowsNotification_*` | Complete matching resources | event content and identifiers are deliberately excluded |
+| Windows action-required history and balloons | permission, reply, confirmation, attention, settings | Yes | `EventHistory_*`, `EventType_*`, `*Required_*`, `Settings_Notify*` | Complete matching resources | only project basename and safe enum-derived text |
 | `PairingPage.html` | connection, computer, events, project, reconnect, errors | Yes | `PairingPage_*` injected into template | Complete matching resources | JSON/message types stay unchanged |
 | `DesktopApplication.cs` | listener and LAN console diagnostics | Developer console | none | English technical output | retained as internal diagnostics |
 | `CodexEventTransformer.cs` title | existing event title in protocol payload | Protocol compatibility | none | rendered locally by Android/browser | retained to avoid payload change |
@@ -23,6 +24,7 @@ The inventory was taken before migration from the 0.5 source tree. Logs, protoco
 | `MainActivity.kt` settings | language page and options | Yes | `common_settings`, `settings_language`, `language_*` | Complete matching resources | English option remains `English` |
 | `MainUiProjection.kt` | connection-state English labels and raw error codes | Yes | resource-ID `UiText` mappings | Stable state-to-resource mapping | state/error codes retained internally |
 | `AgentBellNotificationManager.kt` | channel names/descriptions, foreground/completion text | Yes | `notification_*`, `event_turn_ended` | Complete matching resources | channel IDs unchanged |
+| Android action-required notifications | action channel, four action types, local settings | Yes | `notification_action_required_*`, `notification_*_required_*`, `settings_notifications_*` | Complete matching resources | no raw Hook or assistant content |
 | `MainViewModel.kt` clipboard label | AgentBell diagnostics | Yes | `diagnostics_clip_label` | Matching resource | diagnostic content remains technical English |
 | `AgentBell.iss` tasks/run/icons | startup, shortcut, APK folder, launch | Yes | `Task*`, `AndroidApkFolder`, `LaunchAgentBell` | `en.*` and `zhcn.*` | filenames and task IDs unchanged |
 | `AgentBell.iss` install prompts | integration failure and Hook trust | Yes | `CodexIntegrationFailed`, `CodexTrustReview` | Matching CustomMessages | stage and exit code arguments |
@@ -30,4 +32,8 @@ The inventory was taken before migration from the 0.5 source tree. Logs, protoco
 
 All original user-visible literal occurrences represented above were migrated. The generated audit report records permitted product-name/resource-key exclusions and requires the remaining hardcoded user-visible count to be zero.
 
-The migration baseline is **167 unique semantic user-visible strings**: 90 Windows strings, 65 Android strings, and 12 installer strings. This counts one semantic resource destination once, even where the old literal appeared at several call sites. The nine Windows and six Android strings introduced solely for the new language settings are not counted as pre-migration hardcoding. `scripts/audit-localization.ps1` derives and records this same breakdown from the resource sets so the number cannot silently drift.
+The current inventory contains **236 unique semantic resource keys**: 129 Windows,
+95 Android, and 12 installer keys. M6 added 28 Windows keys and 24 Android keys;
+the installer reused its existing bilingual keys with revised text. The generated
+audit separately reports 219 application strings after excluding the 11 Windows
+and six Android localization-selection strings.

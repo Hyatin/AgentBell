@@ -87,6 +87,83 @@ public sealed class HookCommandExecutionTests
     }
 
     [Fact]
+    public async Task PermissionAndPostToolUse_SpacesAndChinese_AreSanitizedAndRemainNonNotifyingWhenPolicyOff()
+    {
+        using var directory = CreateRunnableHookDirectory(includeDesktop: true);
+        var isolatedPort = GetIsolatedPort();
+        var isolatedLanPort = GetIsolatedPort(isolatedPort);
+        var endpoint = new Uri(
+            $"http://127.0.0.1:{isolatedPort}{DesktopHttpContract.EventsPath}");
+        var eventsPath = Path.Combine(directory.Path, "data-home", "events.json");
+        var diagnosticPath = Path.Combine(directory.Path, "permission-hook.ndjson");
+        await using var desktop = DesktopProcessHarness.Start(
+            Path.Combine(directory.Path, "AgentBell.Desktop.exe"),
+            directory.Path,
+            directory.Path,
+            isolatedPort,
+            isolatedLanPort);
+        await desktop.WaitUntilReadyAsync(
+            endpoint,
+            DesktopProcessHarness.DefaultReadinessTimeout);
+
+        const string SensitiveSentinel = "<REDACTED_TEST_COMMAND>";
+        var result = await RunAsync(
+            Path.Combine(directory.Path, "AgentBell.Hook.exe"),
+            $$"""
+              {
+                "hook_event_name":"PermissionRequest",
+                "session_id":"test-session-reference",
+                "turn_id":"test-turn-reference",
+                "tool_use_id":"test-tool-reference",
+                "cwd":"C:\\Private\\AgentBell",
+                "tool_name":"Bash",
+                "tool_input":{"command":"{{SensitiveSentinel}}"}
+              }
+              """,
+            directory.Path,
+            isolatedPort,
+            diagnosticPath,
+            hookOption: HookInputResolver.CodexPermissionRequestHookOption);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
+        Assert.True(result.Elapsed < TimeSpan.FromSeconds(3), result.Elapsed.ToString());
+        var diagnosticText = await File.ReadAllTextAsync(diagnosticPath);
+        Assert.DoesNotContain(SensitiveSentinel, diagnosticText, StringComparison.Ordinal);
+        using var diagnostic = JsonDocument.Parse(Assert.Single(await File.ReadAllLinesAsync(diagnosticPath)));
+        Assert.Equal("success", diagnostic.RootElement.GetProperty("result").GetString());
+        Assert.Equal(202, diagnostic.RootElement.GetProperty("httpStatus").GetInt32());
+        Assert.Empty((await new JsonEventStore(eventsPath).LoadAsync(CancellationToken.None)).Events);
+
+        var postToolUse = await RunAsync(
+            Path.Combine(directory.Path, "AgentBell.Hook.exe"),
+            """
+              {
+                "hook_event_name":"PostToolUse",
+                "session_id":"test-session-reference",
+                "turn_id":"test-turn-reference",
+                "tool_use_id":"test-tool-reference",
+                "tool_name":"Bash",
+                "tool_input":{"command":"<REDACTED_TEST_COMMAND>"},
+                "tool_response":{"output":"<REDACTED_TEST_OUTPUT>"}
+              }
+              """,
+            directory.Path,
+            isolatedPort,
+            diagnosticPath,
+            hookOption: HookInputResolver.CodexPostToolUseHookOption);
+
+        Assert.Equal(0, postToolUse.ExitCode);
+        Assert.Equal(string.Empty, postToolUse.StandardOutput);
+        Assert.Equal(string.Empty, postToolUse.StandardError);
+        Assert.Empty((await new JsonEventStore(eventsPath).LoadAsync(CancellationToken.None)).Events);
+        var allDiagnostics = await File.ReadAllTextAsync(diagnosticPath);
+        Assert.DoesNotContain(SensitiveSentinel, allDiagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("<REDACTED_TEST_OUTPUT>", allDiagnostics, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DesktopProcess_RuntimeCredentialAuthenticatesAndWrongCredentialIsRejectedWithoutLeaks()
     {
         using var directory = CreateRunnableHookDirectory(includeDesktop: true);
@@ -134,6 +211,18 @@ public sealed class HookCommandExecutionTests
         Assert.Equal(
             "cmd.exe /d /s /c \"\"C:\\Users\\First Last\\本地程序\\AgentBell\\AgentBell.Hook.exe\" --codex-stop-hook\"",
             commands.CommandWindows);
+        Assert.Equal(
+            "\"C:\\Users\\First Last\\本地程序\\AgentBell\\AgentBell.Hook.exe\" --codex-permission-request-hook",
+            commands.PermissionRequest.Command);
+        Assert.Equal(
+            "cmd.exe /d /s /c \"\"C:\\Users\\First Last\\本地程序\\AgentBell\\AgentBell.Hook.exe\" --codex-permission-request-hook\"",
+            commands.PermissionRequest.CommandWindows);
+        Assert.Equal(
+            "\"C:\\Users\\First Last\\本地程序\\AgentBell\\AgentBell.Hook.exe\" --codex-post-tool-use-hook",
+            commands.PostToolUse.Command);
+        Assert.Equal(
+            "cmd.exe /d /s /c \"\"C:\\Users\\First Last\\本地程序\\AgentBell\\AgentBell.Hook.exe\" --codex-post-tool-use-hook\"",
+            commands.PostToolUse.CommandWindows);
         Assert.DoesNotContain("powershell", commands.CommandWindows, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -413,7 +502,8 @@ public sealed class HookCommandExecutionTests
         int isolatedPort,
         string? diagnosticPath = null,
         TimeSpan? forwardTimeout = null,
-        TimeSpan? connectTimeout = null)
+        TimeSpan? connectTimeout = null,
+        string hookOption = HookInputResolver.CodexStopHookOption)
     {
         Assert.True(File.Exists(hookPath));
         Assert.True(Directory.Exists(isolationRoot));
@@ -430,7 +520,7 @@ public sealed class HookCommandExecutionTests
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
-        startInfo.ArgumentList.Add(HookInputResolver.CodexStopHookOption);
+        startInfo.ArgumentList.Add(hookOption);
         startInfo.Environment.Remove(DiagnosticLoggerFactory.EnabledEnvironmentVariable);
         startInfo.Environment.Remove(DiagnosticLoggerFactory.PathEnvironmentVariable);
         startInfo.Environment.Remove(HookEndpointResolver.TestForwardTimeoutEnvironmentVariable);

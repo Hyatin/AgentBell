@@ -27,6 +27,16 @@ public sealed class LruEventIdSet
         }
     }
 
+    /// <summary>Returns whether an identifier is retained without changing recency.</summary>
+    public bool Contains(string eventId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventId);
+        lock (_gate)
+        {
+            return _nodes.ContainsKey(eventId);
+        }
+    }
+
     /// <summary>Adds a new identifier or refreshes an existing one.</summary>
     /// <returns><see langword="true"/> only when the identifier was newly added.</returns>
     public bool TryAdd(string eventId)

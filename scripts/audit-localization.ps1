@@ -176,7 +176,7 @@ $report = [ordered]@{
         android = $baselineAndroidCount
         installer = $baselineInstallerCount
     }
-    baselineDefinition = 'Unique semantic UI strings in the 0.5 source inventory; localization-setting strings introduced by this migration are excluded.'
+    baselineDefinition = 'Current semantic UI resource inventory; localization-selection strings are excluded.'
     findings = $results
     remainingUserVisibleHardcodedCount = $remaining
 }

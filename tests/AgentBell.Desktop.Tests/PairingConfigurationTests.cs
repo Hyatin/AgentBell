@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBell.Localization;
 
 namespace AgentBell.Desktop.Tests;
@@ -102,6 +103,89 @@ public sealed class PairingConfigurationTests
             Assert.Equal(17870, restoredSession.Configuration.LastLanPort);
             Assert.Equal(deviceId, restoredSession.Configuration.DeviceId);
             Assert.Equal(token, restoredSession.Token.Value);
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task NotificationSettings_DefaultPermissionOffAndPersistWithoutChangingPairingToken()
+    {
+        var directory = CreateDirectory();
+        var path = Path.Combine(directory, "config.json");
+        var protector = new FakePairingTokenProtector();
+        try
+        {
+            var created = await CreateManager(path, protector)
+                .LoadOrCreateAsync(CancellationToken.None);
+            string token;
+            using (var session = Assert.IsType<PairingConfigurationSession>(created.Session))
+            {
+                token = session.Token.Value;
+                Assert.Equal(new DesktopNotificationSettings(), session.GetNotificationSettings());
+                Assert.True(await session.UpdateNotificationSettingsAsync(
+                    new DesktopNotificationSettings
+                    {
+                        NotifyTaskCompletion = false,
+                        NotifyActionRequired = true,
+                        PermissionNotificationPolicy =
+                            PermissionNotificationPolicy.AlwaysNotify,
+                        NotifyReplyAndConfirmationRequests = false,
+                        DetectQuestionsInCompletedResponses = false,
+                    },
+                    CancellationToken.None));
+            }
+
+            var restored = await CreateManager(path, protector)
+                .LoadOrCreateAsync(CancellationToken.None);
+            using var restoredSession = Assert.IsType<PairingConfigurationSession>(restored.Session);
+            var settings = restoredSession.GetNotificationSettings();
+            Assert.False(settings.NotifyTaskCompletion);
+            Assert.True(settings.NotifyActionRequired);
+            Assert.Equal(
+                PermissionNotificationPolicy.AlwaysNotify,
+                settings.PermissionNotificationPolicy);
+            Assert.False(settings.NotifyReplyAndConfirmationRequests);
+            Assert.False(settings.DetectQuestionsInCompletedResponses);
+            Assert.Equal(token, restoredSession.Token.Value);
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task LegacyPermissionBooleanTrue_MigratesToOffAndIsRemoved()
+    {
+        var directory = CreateDirectory();
+        var path = Path.Combine(directory, "config.json");
+        var protector = new FakePairingTokenProtector();
+        try
+        {
+            var initial = await CreateManager(path, protector)
+                .LoadOrCreateAsync(CancellationToken.None);
+            Assert.IsType<PairingConfigurationSession>(initial.Session).Dispose();
+            var root = Assert.IsType<JsonObject>(JsonNode.Parse(await File.ReadAllTextAsync(path)));
+            root.Remove("permissionNotificationPolicy");
+            root["notifyPermissionRequests"] = true;
+            await File.WriteAllTextAsync(
+                path,
+                root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                new UTF8Encoding(false));
+
+            var migrated = await CreateManager(path, protector)
+                .LoadOrCreateAsync(CancellationToken.None);
+            using var session = Assert.IsType<PairingConfigurationSession>(migrated.Session);
+
+            Assert.Equal(
+                PermissionNotificationPolicy.Off,
+                session.GetNotificationSettings().PermissionNotificationPolicy);
+            var saved = await File.ReadAllTextAsync(path);
+            Assert.Contains("\"permissionNotificationPolicy\": \"off\"", saved, StringComparison.Ordinal);
+            Assert.DoesNotContain("notifyPermissionRequests", saved, StringComparison.Ordinal);
         }
         finally
         {

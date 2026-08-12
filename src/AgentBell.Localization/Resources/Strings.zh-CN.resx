@@ -88,6 +88,36 @@
   <data name="Tray_Tooltip" xml:space="preserve"><value>AgentBell — {0}</value></data>
   <data name="WindowsNotification_Title" xml:space="preserve"><value>Codex 任务已完成</value></data>
   <data name="WindowsNotification_Body" xml:space="preserve"><value>AgentBell 已收到完成事件。</value></data>
+  <data name="PermissionRequired_Title" xml:space="preserve"><value>Codex 需要权限确认</value></data>
+  <data name="PermissionRequired_Body" xml:space="preserve"><value>请打开 Codex 查看 {0} 项目的请求。</value></data>
+  <data name="PermissionRequired_BodyGeneric" xml:space="preserve"><value>请打开 Codex 查看权限请求。</value></data>
+  <data name="InputRequired_Title" xml:space="preserve"><value>Codex 正在等待你的回复</value></data>
+  <data name="InputRequired_Body" xml:space="preserve"><value>请打开 Codex 继续 {0} 项目中的任务。</value></data>
+  <data name="InputRequired_BodyGeneric" xml:space="preserve"><value>请打开 Codex 继续任务。</value></data>
+  <data name="ConfirmationRequired_Title" xml:space="preserve"><value>Codex 需要你的确认</value></data>
+  <data name="ConfirmationRequired_Body" xml:space="preserve"><value>请打开 Codex 确认 {0} 项目中的任务如何继续。</value></data>
+  <data name="ConfirmationRequired_BodyGeneric" xml:space="preserve"><value>请打开 Codex 确认任务如何继续。</value></data>
+  <data name="AttentionRequired_Title" xml:space="preserve"><value>Codex 需要你处理</value></data>
+  <data name="AttentionRequired_Body" xml:space="preserve"><value>请打开 Codex 查看 {0} 项目中的任务。</value></data>
+  <data name="AttentionRequired_BodyGeneric" xml:space="preserve"><value>请打开 Codex 查看任务。</value></data>
+  <data name="EventHistory_Title" xml:space="preserve"><value>最近事件</value></data>
+  <data name="EventHistory_Row" xml:space="preserve"><value>{0} · {1} · {2}</value></data>
+  <data name="EventHistory_Details" xml:space="preserve"><value>类型：{0}   项目：{1}   时间：{2}</value></data>
+  <data name="EventHistory_NoneSelected" xml:space="preserve"><value>请选择事件查看脱敏元数据。</value></data>
+  <data name="EventType_Completed" xml:space="preserve"><value>已完成</value></data>
+  <data name="EventType_PermissionRequired" xml:space="preserve"><value>需要权限</value></data>
+  <data name="EventType_InputRequired" xml:space="preserve"><value>等待回复</value></data>
+  <data name="EventType_ConfirmationRequired" xml:space="preserve"><value>等待确认</value></data>
+  <data name="EventType_AttentionRequired" xml:space="preserve"><value>需要处理</value></data>
+  <data name="Settings_NotifyTaskCompletion" xml:space="preserve"><value>任务完成时通知</value></data>
+  <data name="Settings_NotifyActionRequired" xml:space="preserve"><value>Codex 需要操作时通知</value></data>
+  <data name="Settings_PermissionRequestNotifications" xml:space="preserve"><value>权限请求提醒</value></data>
+  <data name="PermissionPolicy_Off" xml:space="preserve"><value>关闭</value></data>
+  <data name="PermissionPolicy_AlwaysNotify" xml:space="preserve"><value>始终提醒</value></data>
+  <data name="Settings_PermissionRequestNotificationsHelp" xml:space="preserve"><value>Codex 目前不会向 Hook 暴露权限请求是由 Auto-review 自动处理，还是正在等待你批准。因此，“始终提醒”可能会提醒一些最终由 Codex 自动处理的请求。</value></data>
+  <data name="Settings_NotifyReplyRequests" xml:space="preserve"><value>回复和确认请求</value></data>
+  <data name="Settings_DetectQuestions" xml:space="preserve"><value>检测回复中的操作请求</value></data>
+  <data name="Settings_SaveNotificationsFailed" xml:space="preserve"><value>无法保存通知设置。</value></data>
   <data name="Error_LocalServiceStartFailed" xml:space="preserve"><value>本地接收服务无法启动。请检查 127.0.0.1:17863 是否被其他程序占用，然后导出诊断信息。</value></data>
   <data name="Error_StartupUpdateFailed" xml:space="preserve"><value>无法更新当前用户的开机启动项。</value></data>
   <data name="Error_OpenFolderFailed" xml:space="preserve"><value>无法打开文件夹。</value></data>

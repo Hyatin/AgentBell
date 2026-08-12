@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+(?:-beta\.\d+)?$')]
-    [string]$Version = '0.6.0-beta.1',
+    [string]$Version = '0.7.0-beta.1',
     [switch]$Clean,
     [switch]$DryRun,
     [switch]$SkipAndroid,

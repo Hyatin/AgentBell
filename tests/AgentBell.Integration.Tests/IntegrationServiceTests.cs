@@ -18,13 +18,13 @@ public sealed class IntegrationServiceTests
         var verify = await service.ExecuteAsync("verify", CancellationToken.None);
 
         var expectedHome = Path.Combine(profile, ".codex");
-        Assert.True(result.Success);
+        Assert.True(result.Success, JsonSerializer.Serialize(result));
         Assert.True(result.Changed);
         Assert.Null(result.BackupPath);
         Assert.Equal("completed", result.Stage);
         Assert.Equal(Path.GetFullPath(expectedHome), result.CodexHomePath);
         Assert.True(File.Exists(Path.Combine(expectedHome, "hooks.json")));
-        Assert.True(verify.Success);
+        Assert.True(verify.Success, JsonSerializer.Serialize(verify));
         Assert.Equal("verified", verify.Code);
     }
 

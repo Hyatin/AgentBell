@@ -52,6 +52,17 @@ This file is the terminology authority for user-facing AgentBell text. Product a
 | Foreground service | 前台服务 |
 | AgentBell is connected / running | AgentBell 已连接 / AgentBell 正在运行 |
 | Task completed / Codex task completed | 任务已完成 / Codex 任务已完成 |
+| Action required | 需要操作 |
+| Permission required | 需要权限 |
+| Reply required | 等待回复 |
+| Confirmation required | 等待确认 |
+| Attention required | 需要处理 |
+| Notify when tasks complete | 任务完成时通知 |
+| Notify when Codex needs attention | Codex 需要操作时通知 |
+| Permission request notifications | 权限请求提醒 |
+| Off | 关闭 |
+| Always notify | 始终提醒 |
+| Reply and confirmation requests | 回复和确认请求 |
 | Codex integration | Codex 集成 |
 | Enable / Disable Codex integration | 启用 / 停用 Codex 集成 |
 | Install Hook / Remove Hook | 安装 Hook / 移除 Hook |
@@ -62,7 +73,7 @@ This file is the terminology authority for user-facing AgentBell text. Product a
 | Error code / Exit code | 错误代码 / 退出码 |
 | Unexpected error / Operation canceled | 意外错误 / 操作已取消 |
 | Invalid configuration | 配置无效 |
-| Permission required / Access denied | 需要权限 / 访问被拒绝 |
+| Access denied | 访问被拒绝 |
 | Security / Privacy / Encryption | 安全 / 隐私 / 加密 |
 | Encrypted / Not encrypted | 已加密 / 未加密 |
 | Insecure connection | 不安全连接 |

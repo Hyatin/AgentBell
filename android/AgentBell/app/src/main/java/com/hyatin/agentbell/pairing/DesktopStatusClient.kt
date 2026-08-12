@@ -55,7 +55,7 @@ class OkHttpDesktopStatusTransport(
                     if (!response.isSuccessful) {
                         return@withContext StatusFetchResult.Failure("status_http_error")
                     }
-                    val body = response.body ?: return@withContext StatusFetchResult.Failure("status_empty")
+                    val body = response.body
                     val source = body.source()
                     source.request(MAX_STATUS_BYTES + 1L)
                     if (source.buffer.size > MAX_STATUS_BYTES) {
