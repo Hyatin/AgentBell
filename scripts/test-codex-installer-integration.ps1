@@ -12,7 +12,10 @@ param(
 
     [string]$InstallerAppId = 'A17863B4-7E64-4D74-A0B4-004000000001',
 
-    [string]$CriticalFailureSetupPath
+    [string]$CriticalFailureSetupPath,
+
+    [ValidateSet('All', 'NormalUninstall')]
+    [string]$Scenario = 'All'
 )
 
 Set-StrictMode -Version Latest
@@ -74,6 +77,10 @@ if (-not $SkipSetup) {
     if ($null -ne (Get-AgentBellRegistration)) {
         throw 'Refusing to run the Setup integration test while AgentBell is already registered for this user.'
     }
+}
+
+if ($Scenario -ne 'All' -and $SkipSetup) {
+    throw 'The NormalUninstall scenario requires -SetupPath.'
 }
 
 function Invoke-CapturedProcess {
@@ -139,6 +146,125 @@ function Invoke-Integration {
     return [pscustomobject]@{
         Process = $process
         Result = $result
+    }
+}
+
+function Get-RequiredDiagnosticProperty {
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $property = $Record.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        throw "The uninstall Integration diagnostic is missing required field '$Name'."
+    }
+    return $property.Value
+}
+
+function Get-UninstallIntegrationDiagnostic {
+    param([Parameter(Mandatory = $true)][string]$LogContent)
+
+    $marker = 'AgentBell Integration stdout:'
+    $records = [System.Collections.Generic.List[object]]::new()
+    foreach ($line in [System.Text.RegularExpressions.Regex]::Split($LogContent, '\r\n|\n|\r')) {
+        $markerIndex = $line.IndexOf($marker, [StringComparison]::Ordinal)
+        if ($markerIndex -lt 0) {
+            continue
+        }
+
+        $json = $line.Substring($markerIndex + $marker.Length).Trim()
+        if ([string]::IsNullOrWhiteSpace($json)) {
+            throw 'The uninstall Integration diagnostic record is empty.'
+        }
+
+        try {
+            $record = $json | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+        }
+        catch {
+            throw 'The uninstall Integration diagnostic contains malformed JSON.'
+        }
+        if ($null -eq $record -or
+            $record -isnot [System.Management.Automation.PSCustomObject]) {
+            throw 'The uninstall Integration diagnostic is not a JSON object.'
+        }
+        $records.Add($record)
+    }
+
+    $uninstallRecords = @($records | Where-Object {
+        $code = $_.PSObject.Properties['code']
+        $null -ne $code -and [string]$code.Value -ceq 'uninstalled'
+    })
+    if ($uninstallRecords.Count -eq 0) {
+        throw 'The exact uninstall log contains no completed uninstall Integration diagnostic.'
+    }
+    if ($uninstallRecords.Count -ne 1) {
+        throw 'The exact uninstall log contains duplicate uninstall Integration diagnostics.'
+    }
+    return $uninstallRecords[0]
+}
+
+function Assert-NormalUninstallDiagnostic {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogContent,
+        [Parameter(Mandatory = $true)][int]$ExpectedBeforeCount
+    )
+
+    $record = Get-UninstallIntegrationDiagnostic -LogContent $LogContent
+    $success = Get-RequiredDiagnosticProperty -Record $record -Name 'success'
+    $code = Get-RequiredDiagnosticProperty -Record $record -Name 'code'
+    $stage = Get-RequiredDiagnosticProperty -Record $record -Name 'stage'
+    $beforeCount = Get-RequiredDiagnosticProperty -Record $record -Name 'agentBellHookCountBefore'
+    $afterCount = Get-RequiredDiagnosticProperty -Record $record -Name 'agentBellHookCount'
+    if ($success -ne $true -or
+        [string]$code -cne 'uninstalled' -or
+        [string]$stage -cne 'completed' -or
+        [int]$beforeCount -ne $ExpectedBeforeCount -or
+        [int]$afterCount -ne 0) {
+        throw "The uninstall Integration diagnostic did not report the expected before/after state ($ExpectedBeforeCount/0)."
+    }
+}
+
+function Assert-DiagnosticParserThrows {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Action,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    try {
+        $null = & $Action
+    }
+    catch {
+        return
+    }
+    throw "Diagnostic parser test did not fail closed: $Description"
+}
+
+function Test-UninstallDiagnosticParser {
+    $prefix = '2026-08-12 12:00:00.000   AgentBell Integration stdout: '
+    $compact = '{"success":true,"code":"uninstalled","stage":"completed","agentBellHookCountBefore":1,"agentBellHookCount":0}'
+    $spaced = '{ "success": true, "code": "uninstalled", "stage": "completed", "agentBellHookCountBefore": 1, "agentBellHookCount": 0 }'
+    $beforeThree = '{"success":true,"code":"uninstalled","stage":"completed","agentBellHookCountBefore":3,"agentBellHookCount":0}'
+    $repair = '{"success":true,"code":"installed","stage":"completed","agentBellHookCountBefore":1,"agentBellHookCount":3}'
+
+    [void](Assert-NormalUninstallDiagnostic -LogContent ($prefix + $compact) -ExpectedBeforeCount 1)
+    [void](Assert-NormalUninstallDiagnostic -LogContent ($prefix + $spaced) -ExpectedBeforeCount 1)
+    [void](Assert-NormalUninstallDiagnostic -LogContent ("header`n" + $prefix + $compact + "`nfooter") -ExpectedBeforeCount 1)
+    [void](Assert-NormalUninstallDiagnostic -LogContent ("header`r`n" + $prefix + $compact + "`r`nfooter") -ExpectedBeforeCount 1)
+    [void](Assert-NormalUninstallDiagnostic -LogContent (([char]0xFEFF) + $prefix + $compact) -ExpectedBeforeCount 1)
+    [void](Assert-NormalUninstallDiagnostic -LogContent ($prefix + $repair + "`r`n" + $prefix + $beforeThree) -ExpectedBeforeCount 3)
+
+    Assert-DiagnosticParserThrows -Description 'missing before-count field' -Action {
+        Assert-NormalUninstallDiagnostic -LogContent ($prefix + '{"success":true,"code":"uninstalled","stage":"completed","agentBellHookCount":0}') -ExpectedBeforeCount 1
+    }
+    Assert-DiagnosticParserThrows -Description 'wrong before-count value' -Action {
+        Assert-NormalUninstallDiagnostic -LogContent ($prefix + $beforeThree) -ExpectedBeforeCount 1
+    }
+    Assert-DiagnosticParserThrows -Description 'malformed JSON' -Action {
+        Get-UninstallIntegrationDiagnostic -LogContent ($prefix + '{"code":"uninstalled"')
+    }
+    Assert-DiagnosticParserThrows -Description 'contradictory duplicate uninstall records' -Action {
+        Get-UninstallIntegrationDiagnostic -LogContent ($prefix + $compact + "`n" + $prefix + $beforeThree)
     }
 }
 
@@ -383,6 +509,115 @@ try {
         -Path $directCodexHome, $uninstallCodexHome, $setupCodexHome, $fallbackProfile, $chineseCodexHome `
         -Force | Out-Null
 
+    Write-Host 'Testing structured uninstall diagnostic parsing...'
+    Test-UninstallDiagnosticParser
+
+    if ($Scenario -eq 'NormalUninstall') {
+        Write-Host 'Testing targeted normal uninstall with a fresh isolated root...'
+        $setupHooksPath = Join-Path $setupCodexHome 'hooks.json'
+        $setup = Invoke-CapturedProcess -FilePath $SetupPath -Arguments @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/NOICONS',
+            '/TASKS=',
+            "/DIR=$setupInstallDirectory",
+            "/LOG=$setupLog"
+        ) -Environment @{ CODEX_HOME = $setupCodexHome }
+        if ($setup.ExitCode -ne 0) {
+            throw "Targeted Setup first installation failed with exit code $($setup.ExitCode)."
+        }
+        $setupInstalled = $true
+        $installedHookPath = Join-Path $setupInstallDirectory 'AgentBell.Hook.exe'
+        Assert-HooksDocument -HooksPath $setupHooksPath -ExpectedHookPath $installedHookPath
+        if (@(Get-ChildItem -LiteralPath $setupCodexHome -Filter '*.agentbell-backup-*').Count -ne 0) {
+            throw 'Targeted Setup fresh creation produced a meaningless backup.'
+        }
+
+        $setupLegacyHookPath = Join-Path $tempRoot `
+            'Setup Repository\AgentBell\artifacts\m0-hook\AgentBell.Hook.exe'
+        $setupFixture = [ordered]@{
+            owner = 'installer-integration-test'
+            hooks = [ordered]@{
+                Stop = @(
+                    [ordered]@{
+                        hooks = @([ordered]@{ type = 'command'; command = 'other-tool.exe --stop' })
+                    },
+                    [ordered]@{
+                        hooks = @([ordered]@{
+                            type = 'command'
+                            command = '"' + $setupLegacyHookPath + '" --codex-stop-hook'
+                            timeout = 1
+                        })
+                    }
+                )
+            }
+        } | ConvertTo-Json -Depth 8
+        [System.IO.File]::WriteAllText($setupHooksPath, $setupFixture, $utf8NoBom)
+        $setupFixtureHash = Get-Sha256 -Path $setupHooksPath
+        $setupUpgrade = Invoke-CapturedProcess -FilePath $SetupPath -Arguments @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/NOICONS',
+            '/TASKS=',
+            "/DIR=$setupInstallDirectory",
+            "/LOG=$setupLog"
+        ) -Environment @{ CODEX_HOME = $setupCodexHome }
+        if ($setupUpgrade.ExitCode -ne 0) {
+            throw "Targeted Setup in-place upgrade failed with exit code $($setupUpgrade.ExitCode)."
+        }
+        Assert-HooksDocument -HooksPath $setupHooksPath `
+            -ExpectedHookPath $installedHookPath `
+            -RequireOtherHook
+        $setupBackups = @(Get-ChildItem -LiteralPath $setupCodexHome -Filter '*.agentbell-backup-*')
+        if ($setupBackups.Count -ne 1 -or
+            (Get-Sha256 -Path $setupBackups[0].FullName) -cne $setupFixtureHash) {
+            throw 'Targeted Setup upgrade did not preserve one byte-for-byte legacy backup.'
+        }
+
+        $preUninstallHash = Get-Sha256 -Path $setupHooksPath
+        $preUninstallBackupCount = $setupBackups.Count
+        $retainedDataPath = Join-Path $setupCodexHome 'retained-user-data.json'
+        [System.IO.File]::WriteAllText($retainedDataPath, '{"retain":true}', $utf8NoBom)
+        [void](Invoke-TestUninstaller `
+            -UninstallerPath $uninstallerPath `
+            -InstallDirectory $setupInstallDirectory `
+            -LogPath $normalUninstallLog `
+            -Environment @{ CODEX_HOME = $setupCodexHome })
+        $setupInstalled = $false
+        Assert-OnlyOtherHookRemains -HooksPath $setupHooksPath
+        if (-not (Test-Path -LiteralPath $retainedDataPath -PathType Leaf)) {
+            throw 'The targeted normal uninstall removed retained user data.'
+        }
+        $postUninstallBackups = @(
+            Get-ChildItem -LiteralPath $setupCodexHome -Filter '*.agentbell-backup-*'
+        )
+        $matchingUninstallBackups = @($postUninstallBackups | Where-Object {
+            (Get-Sha256 -Path $_.FullName) -ceq $preUninstallHash
+        })
+        if ($postUninstallBackups.Count -ne ($preUninstallBackupCount + 1) -or
+            $matchingUninstallBackups.Count -ne 1) {
+            throw 'The targeted normal uninstall did not preserve one byte-for-byte pre-uninstall backup.'
+        }
+
+        $normalLog = Get-Content -Raw -LiteralPath $normalUninstallLog
+        Assert-NormalUninstallDiagnostic -LogContent $normalLog -ExpectedBeforeCount 3
+        foreach ($requiredLogText in @(
+            'AgentBell uninstall resolved CODEX_HOME:',
+            'AgentBell uninstall hooks.json exists: yes',
+            'AgentBell uninstall backup candidate count:',
+            'AgentBell uninstall stage: codex_hook_cleanup.',
+            'AgentBell uninstall Codex cleanup: completed or safely skipped.')) {
+            if (-not $normalLog.Contains($requiredLogText, [StringComparison]::Ordinal)) {
+                throw "Targeted normal uninstall log omitted required diagnostic marker: $requiredLogText"
+            }
+        }
+
+        Write-Host 'Targeted normal uninstall scenario passed.' -ForegroundColor Green
+        return
+    }
+
     Write-Host 'Testing first creation with an isolated missing hooks.json...'
     $hooksPath = Join-Path $directCodexHome 'hooks.json'
     $first = Invoke-Integration -Operation 'repair' -CodexHome $directCodexHome
@@ -604,6 +839,8 @@ try {
         }
 
         Write-Host 'Testing normal uninstall, registration cleanup, data retention, and Hook preservation...'
+        $preUninstallHash = Get-Sha256 -Path $setupHooksPath
+        $preUninstallBackupCount = $setupBackups.Count
         $retainedDataPath = Join-Path $setupCodexHome 'retained-user-data.json'
         [System.IO.File]::WriteAllText($retainedDataPath, '{"retain":true}', $utf8NoBom)
         [void](Invoke-TestUninstaller `
@@ -616,13 +853,23 @@ try {
         if (-not (Test-Path -LiteralPath $retainedDataPath -PathType Leaf)) {
             throw 'The user-selected retained data marker was removed.'
         }
+        $postUninstallBackups = @(
+            Get-ChildItem -LiteralPath $setupCodexHome -Filter '*.agentbell-backup-*'
+        )
+        $matchingUninstallBackups = @($postUninstallBackups | Where-Object {
+            (Get-Sha256 -Path $_.FullName) -ceq $preUninstallHash
+        })
+        if ($postUninstallBackups.Count -ne ($preUninstallBackupCount + 1) -or
+            $matchingUninstallBackups.Count -ne 1) {
+            throw 'Normal uninstall did not preserve one byte-for-byte pre-uninstall backup.'
+        }
         $normalLog = Get-Content -Raw -LiteralPath $normalUninstallLog
+        Assert-NormalUninstallDiagnostic -LogContent $normalLog -ExpectedBeforeCount 3
         foreach ($requiredLogText in @(
             'AgentBell uninstall resolved CODEX_HOME:',
             'AgentBell uninstall hooks.json exists: yes',
             'AgentBell uninstall backup candidate count:',
             'AgentBell uninstall stage: codex_hook_cleanup.',
-            '"agentBellHookCountBefore":1',
             'AgentBell uninstall Codex cleanup: completed or safely skipped.')) {
             if (-not $normalLog.Contains($requiredLogText, [StringComparison]::Ordinal)) {
                 throw "Normal uninstall log omitted required diagnostic marker: $requiredLogText"
