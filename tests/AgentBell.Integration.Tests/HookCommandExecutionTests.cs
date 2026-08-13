@@ -230,6 +230,23 @@ public sealed class HookCommandExecutionTests
         Assert.Equal(
             "cmd.exe /d /s /c \"\"C:\\Users\\First Last\\本地程序\\AgentBell\\AgentBell.Hook.exe\" --codex-post-tool-use-hook\"",
             commands.PostToolUse.CommandWindows);
+        Assert.Equal(
+            ["Stop", "PermissionRequest", "PostToolUse"],
+            commands.All.Select(item => item.EventName));
+        Assert.Equal(
+            [
+                "--codex-stop-hook",
+                "--codex-permission-request-hook",
+                "--codex-post-tool-use-hook",
+            ],
+            commands.All.Select(item => item.Option));
+        Assert.Equal(
+            [
+                "Sending completion to AgentBell",
+                "Sending permission request to AgentBell",
+                "Resolving AgentBell permission request",
+            ],
+            commands.All.Select(item => item.StatusMessage));
         Assert.DoesNotContain("powershell", commands.CommandWindows, StringComparison.OrdinalIgnoreCase);
     }
 

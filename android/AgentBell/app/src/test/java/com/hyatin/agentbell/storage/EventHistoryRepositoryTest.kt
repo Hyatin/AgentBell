@@ -3,7 +3,12 @@ package com.hyatin.agentbell.storage
 import com.hyatin.agentbell.InMemoryEventStateStorage
 import com.hyatin.agentbell.InMemoryPairingCredentialStore
 import com.hyatin.agentbell.testEvent
+import com.hyatin.agentbell.notification.AgentBellNotificationManager
+import com.hyatin.agentbell.notification.NotificationPreferencesState
 import com.hyatin.agentbell.protocol.AgentEventSemantics
+import com.hyatin.agentbell.protocol.ProtocolMessageCodec
+import com.hyatin.agentbell.protocol.ProtocolParseResult
+import com.hyatin.agentbell.protocol.ServerMessage
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
@@ -13,6 +18,31 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EventHistoryRepositoryTest {
+    @Test fun current07CompletionAndActionFixturesParseStoreAndReachNotificationPolicy() = runTest {
+        val completionJson =
+            """{"type":"event","payload":{"eventId":"codex:fixture-thread:fixture-turn-1","agent":"codex","status":"completed","category":"completion","actionType":"none","toolCategory":"none","title":"Codex turn completed","project":"AgentBell","summary":"Synthetic completion.","threadIdHash":"fixturethread","turnIdHash":"fixtureturn1","toolUseIdHash":null,"occurredAt":"2026-08-07T00:00:00Z","sequence":41,"resolvedAt":null}}"""
+        val actionJson =
+            """{"type":"event","payload":{"eventId":"codex-action:fixture-action","agent":"codex","status":"action_required","category":"action_required","actionType":"input_required","toolCategory":"none","title":"Codex action required","project":"AgentBell","summary":null,"threadIdHash":"fixturethread","turnIdHash":"fixtureturn2","toolUseIdHash":null,"occurredAt":"2026-08-07T00:00:01Z","sequence":42,"resolvedAt":null}}"""
+        val completion = parse07Event(completionJson)
+        val action = parse07Event(actionJson)
+        val storage = InMemoryEventStateStorage()
+        val repository = EventHistoryRepository(storage, InMemoryPairingCredentialStore())
+        repository.initialize()
+
+        assertTrue(repository.process(completion) is EventProcessResult.Accepted)
+        assertTrue(repository.process(action) is EventProcessResult.Accepted)
+
+        assertEquals(listOf(action.eventId, completion.eventId), repository.events.value.map { it.eventId })
+        assertEquals(listOf(completion.eventId, action.eventId), storage.state.recentEventIds)
+        val preferences = NotificationPreferencesState()
+        assertTrue(AgentBellNotificationManager.shouldNotify(completion, preferences))
+        assertTrue(AgentBellNotificationManager.shouldNotify(action, preferences))
+        assertEquals(
+            AgentBellNotificationManager.actionNotificationId(action),
+            AgentBellNotificationManager.actionNotificationId(action.copy()),
+        )
+    }
+
     @Test fun permissionEventIsSuppressedFromHistoryButAdvancesResumeWatermarkWhenPolicyIsOff() =
         runTest {
             val storage = InMemoryEventStateStorage()
@@ -144,4 +174,8 @@ class EventHistoryRepositoryTest {
         assertEquals(5, storage.state.lastSequence)
         assertTrue(repository.process(resolved) is EventProcessResult.Duplicate)
     }
+
+    private fun parse07Event(json: String) =
+        (((ProtocolMessageCodec.parseServerMessage(json) as ProtocolParseResult.Success).message)
+            as ServerMessage.Event).payload
 }

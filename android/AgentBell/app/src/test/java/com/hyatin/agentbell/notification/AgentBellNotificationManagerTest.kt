@@ -91,6 +91,10 @@ class AgentBellNotificationManagerTest {
             PermissionNotificationPolicy.OFF,
             PermissionNotificationPolicy.migrate(null, legacyEnabled = true),
         )
+        assertEquals(
+            PermissionNotificationPolicy.OFF,
+            PermissionNotificationPolicy.migrate(null, legacyEnabled = false),
+        )
     }
 
     @Test fun replySettingDoesNotDisableGenericAttention() {

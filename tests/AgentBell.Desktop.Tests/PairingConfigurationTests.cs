@@ -157,8 +157,10 @@ public sealed class PairingConfigurationTests
         }
     }
 
-    [Fact]
-    public async Task LegacyPermissionBooleanTrue_MigratesToOffAndIsRemoved()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LegacyPermissionBoolean_MigratesToOffAndIsRemoved(bool legacyValue)
     {
         var directory = CreateDirectory();
         var path = Path.Combine(directory, "config.json");
@@ -170,7 +172,7 @@ public sealed class PairingConfigurationTests
             Assert.IsType<PairingConfigurationSession>(initial.Session).Dispose();
             var root = Assert.IsType<JsonObject>(JsonNode.Parse(await File.ReadAllTextAsync(path)));
             root.Remove("permissionNotificationPolicy");
-            root["notifyPermissionRequests"] = true;
+            root["notifyPermissionRequests"] = legacyValue;
             await File.WriteAllTextAsync(
                 path,
                 root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
@@ -189,6 +191,66 @@ public sealed class PairingConfigurationTests
         }
         finally
         {
+            DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task LoadOrCreate_Synthetic07ConfigurationFixture_PreservesCurrentSemantics()
+    {
+        var directory = CreateDirectory();
+        var path = Path.Combine(directory, "config.json");
+        var protector = new FakePairingTokenProtector();
+        var protectedBytes = Enumerable.Range(0, PairingToken.ByteLength)
+            .Select(value => (byte)value)
+            .ToArray();
+        var ciphertext = Convert.ToBase64String(protectedBytes);
+        const string Template = """
+            {
+              "protocolVersion": 1,
+              "deviceId": "synthetic-device-07",
+              "deviceName": "测试电脑 07 🔔",
+              "encryptedPairingToken": "<REDACTED>",
+              "lastLanPort": 17870,
+              "language": "zh-CN",
+              "notifyTaskCompletion": false,
+              "notifyActionRequired": true,
+              "permissionNotificationPolicy": "always_notify",
+              "notifyReplyAndConfirmationRequests": false,
+              "detectQuestionsInCompletedResponses": false,
+              "createdAt": "2026-08-07T00:00:00+00:00",
+              "updatedAt": "2026-08-07T00:00:01+00:00"
+            }
+            """;
+
+        try
+        {
+            var fixture = Template.Replace("<REDACTED>", ciphertext, StringComparison.Ordinal);
+            await File.WriteAllTextAsync(path, fixture, new UTF8Encoding(false));
+
+            var loaded = await CreateManager(path, protector)
+                .LoadOrCreateAsync(CancellationToken.None);
+            using var session = Assert.IsType<PairingConfigurationSession>(loaded.Session);
+            var settings = session.GetNotificationSettings();
+
+            Assert.False(loaded.TokenRegenerated);
+            Assert.Equal(1, session.Configuration.ProtocolVersion);
+            Assert.Equal("synthetic-device-07", session.Configuration.DeviceId);
+            Assert.Equal("测试电脑 07 🔔", session.Configuration.DeviceName);
+            Assert.Equal(17870, session.Configuration.LastLanPort);
+            Assert.Equal("zh-CN", session.Configuration.Language);
+            Assert.False(settings.NotifyTaskCompletion);
+            Assert.True(settings.NotifyActionRequired);
+            Assert.Equal(
+                PermissionNotificationPolicy.AlwaysNotify,
+                settings.PermissionNotificationPolicy);
+            Assert.False(settings.NotifyReplyAndConfirmationRequests);
+            Assert.False(settings.DetectQuestionsInCompletedResponses);
+            Assert.DoesNotContain("configurationVersion", await File.ReadAllTextAsync(path), StringComparison.Ordinal);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(protectedBytes);
             DeleteDirectory(directory);
         }
     }

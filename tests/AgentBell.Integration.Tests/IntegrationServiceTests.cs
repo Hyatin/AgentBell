@@ -191,6 +191,92 @@ public sealed class IntegrationServiceTests
     }
 
     [Fact]
+    public async Task IntegrationProgram_07Operations_PreserveSafeJsonAndExitContracts()
+    {
+        const string Sentinel = "AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A";
+        using var directory = new TemporaryDirectory();
+        var home = Path.Combine(directory.Path, "CLI lifecycle 中文");
+        var expectations = new[]
+        {
+            new CliExpectation("install", "installed", "Installed", "completed", true, 0, 3, true),
+            new CliExpectation("status", "installed", "Installed", "completed", false, 3, 3, false),
+            new CliExpectation("repair", "installed", "Installed", "completed", false, 3, 3, false),
+            new CliExpectation("verify", "verified", "Installed", "completed", false, 3, 3, false),
+            new CliExpectation("uninstall", "uninstalled", "Missing", "completed", true, 3, 0, false),
+        };
+
+        foreach (var expectation in expectations)
+        {
+            using var output = new StringWriter();
+            var exitCode = await IntegrationProgram.RunAsync(
+                [expectation.Operation, "--json", "--codex-home", home],
+                output,
+                CancellationToken.None);
+            using var document = JsonDocument.Parse(output.ToString());
+            var root = document.RootElement;
+
+            Assert.Equal(IntegrationExitCodes.Success, exitCode);
+            Assert.True(root.GetProperty("success").GetBoolean());
+            Assert.Equal(expectation.Changed, root.GetProperty("changed").GetBoolean());
+            Assert.Equal(expectation.Code, root.GetProperty("code").GetString());
+            Assert.Equal(expectation.State, root.GetProperty("state").GetString());
+            Assert.Equal(expectation.Stage, root.GetProperty("stage").GetString());
+            Assert.Equal(expectation.Before, root.GetProperty("agentBellHookCountBefore").GetInt32());
+            Assert.Equal(expectation.After, root.GetProperty("agentBellHookCount").GetInt32());
+            Assert.Equal(
+                expectation.TrustReviewRequired,
+                root.GetProperty("trustReviewRequired").GetBoolean());
+            Assert.Equal(Path.GetFullPath(home), root.GetProperty("codexHomePath").GetString());
+            Assert.Equal(
+                Expected07ResultProperties,
+                root.EnumerateObject().Select(item => item.Name).Order().ToArray());
+            Assert.DoesNotContain("commandWindows", output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(Sentinel, output.ToString(), StringComparison.Ordinal);
+            Assert.False(root.TryGetProperty("provider", out _));
+            Assert.False(root.TryGetProperty("providerId", out _));
+        }
+    }
+
+    [Fact]
+    public async Task IntegrationProgram_Ambiguous07Ownership_FailsClosedWithManualReviewExit()
+    {
+        using var directory = new TemporaryDirectory();
+        var home = Path.Combine(directory.Path, "ambiguous ownership");
+        Directory.CreateDirectory(home);
+        await File.WriteAllTextAsync(
+            Path.Combine(home, "hooks.json"),
+            """
+            {"hooks":{"Stop":[
+              {"hooks":[{"type":"command","command":"C:\\SyntheticA\\AgentBell\\artifacts\\m0-hook\\AgentBell.Hook.exe --codex-stop-hook"}]},
+              {"hooks":[{"type":"command","command":"C:\\SyntheticB\\AgentBell\\artifacts\\m0-hook\\AgentBell.Hook.exe --codex-stop-hook"}]}
+            ]}}
+            """,
+            new System.Text.UTF8Encoding(false));
+        var before = await File.ReadAllBytesAsync(Path.Combine(home, "hooks.json"));
+        using var output = new StringWriter();
+
+        var exitCode = await IntegrationProgram.RunAsync(
+            ["repair", "--json", "--codex-home", home],
+            output,
+            CancellationToken.None);
+        using var document = JsonDocument.Parse(output.ToString());
+        var root = document.RootElement;
+
+        Assert.Equal(IntegrationExitCodes.ManualReviewRequired, exitCode);
+        Assert.False(root.GetProperty("success").GetBoolean());
+        Assert.False(root.GetProperty("changed").GetBoolean());
+        Assert.Equal("NeedsManualReview", root.GetProperty("state").GetString());
+        Assert.Equal("manual_review_required", root.GetProperty("code").GetString());
+        Assert.Equal("analyze", root.GetProperty("stage").GetString());
+        Assert.Equal(2, root.GetProperty("agentBellHookCount").GetInt32());
+        Assert.False(root.GetProperty("trustReviewRequired").GetBoolean());
+        Assert.Equal(before, await File.ReadAllBytesAsync(Path.Combine(home, "hooks.json")));
+        Assert.Equal(
+            Expected07ResultProperties,
+            root.EnumerateObject().Select(item => item.Name).Order().ToArray());
+    }
+
+    [Fact]
     public void CodexHomeResolver_MissingEnvironmentAndUserProfile_ReturnsExplicitFailure()
     {
         var resolver = new CodexHomeResolver(_ => null, _ => string.Empty);
@@ -208,6 +294,37 @@ public sealed class IntegrationServiceTests
         File.WriteAllBytes(path, [0x4d, 0x5a]);
         return path;
     }
+
+    private static readonly string[] Expected07ResultProperties =
+    [
+        "agentBellHookCount",
+        "agentBellHookCountBefore",
+        "backupCandidateCount",
+        "backupPath",
+        "changed",
+        "code",
+        "codexHomePath",
+        "completedStages",
+        "hooksFileExistedBefore",
+        "hooksPath",
+        "rollbackAttempted",
+        "rollbackSucceeded",
+        "stage",
+        "state",
+        "success",
+        "temporaryPath",
+        "trustReviewRequired",
+    ];
+
+    private sealed record CliExpectation(
+        string Operation,
+        string Code,
+        string State,
+        string Stage,
+        bool Changed,
+        int Before,
+        int After,
+        bool TrustReviewRequired);
 
     private sealed class TemporaryDirectory : IDisposable
     {

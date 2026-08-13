@@ -9,6 +9,19 @@ namespace AgentBell.Hook.Tests;
 public sealed class StopHookProcessTests
 {
     [Fact]
+    public void FormalSwitches_AreExact07CompatibilityContract()
+    {
+        Assert.Equal("--codex-stop-hook", HookInputResolver.CodexStopHookOption);
+        Assert.Equal(
+            "--codex-permission-request-hook",
+            HookInputResolver.CodexPermissionRequestHookOption);
+        Assert.Equal(
+            "--codex-post-tool-use-hook",
+            HookInputResolver.CodexPostToolUseHookOption);
+        Assert.Equal("--payload-file", HookInputResolver.PayloadFileOption);
+    }
+
+    [Fact]
     public async Task StopHookProcess_NormalInput_ExitsZeroWithExactJsonStdoutAndEmptyStderr()
     {
         const string Json = """
@@ -45,15 +58,19 @@ public sealed class StopHookProcessTests
     [Fact]
     public async Task PermissionRequestProcess_ValidInput_ExitsZeroAndIsCompletelySilent()
     {
+        const string Sentinel = "AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A";
         const string Json = """
             {
               "hook_event_name":"PermissionRequest",
               "session_id":"test-session-reference",
               "turn_id":"test-turn-reference",
               "tool_use_id":"test-tool-reference",
-              "cwd":"C:\\TestRoot\\Project",
+              "cwd":"C:\\AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A\\Project",
               "tool_name":"Bash",
-              "tool_input":{"command":"<REDACTED_TEST_COMMAND>"}
+              "prompt":"AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A",
+              "tool_input":{"command":"AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A"},
+              "tool_output":"AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A",
+              "unknown":"AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A"
             }
             """;
 
@@ -65,6 +82,8 @@ public sealed class StopHookProcessTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(string.Empty, result.StandardOutput);
         Assert.Equal(string.Empty, result.StandardError);
+        Assert.DoesNotContain(Sentinel, result.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain(Sentinel, result.StandardError, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -240,6 +259,77 @@ public sealed class StopHookProcessTests
                 File.Delete(path);
             }
         }
+    }
+
+    [Fact]
+    public async Task PermissionRequestProcess_SameIdsAcrossProcesses_ProducesStableEventFingerprint()
+    {
+        const string Json = """
+            {
+              "hook_event_name":"PermissionRequest",
+              "session_id":"stable-session",
+              "turn_id":"stable-turn",
+              "tool_use_id":"stable-tool-use",
+              "tool_name":"Bash"
+            }
+            """;
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"AgentBell-Permission-{Guid.NewGuid():N}.ndjson");
+
+        try
+        {
+            var first = await RunHookProcessAsync(
+                [HookInputResolver.CodexPermissionRequestHookOption],
+                Json,
+                path);
+            var second = await RunHookProcessAsync(
+                [HookInputResolver.CodexPermissionRequestHookOption],
+                Json,
+                path);
+
+            Assert.Equal(0, first.ExitCode);
+            Assert.Equal(0, second.ExitCode);
+            Assert.Equal(string.Empty, first.StandardOutput);
+            Assert.Equal(string.Empty, second.StandardOutput);
+            Assert.Equal(string.Empty, first.StandardError);
+            Assert.Equal(string.Empty, second.StandardError);
+            var lines = File.ReadAllLines(path);
+            Assert.Equal(2, lines.Length);
+            using var firstDocument = JsonDocument.Parse(lines[0]);
+            using var secondDocument = JsonDocument.Parse(lines[1]);
+            var firstFingerprint = firstDocument.RootElement
+                .GetProperty("eventIdHash")
+                .GetString();
+            var secondFingerprint = secondDocument.RootElement
+                .GetProperty("eventIdHash")
+                .GetString();
+            Assert.Equal("92095e4b36669f468e1bb430", firstFingerprint);
+            Assert.Equal(firstFingerprint, secondFingerprint);
+            Assert.DoesNotContain("stable-session", string.Join('\n', lines), StringComparison.Ordinal);
+            Assert.DoesNotContain("stable-turn", string.Join('\n', lines), StringComparison.Ordinal);
+            Assert.DoesNotContain("stable-tool-use", string.Join('\n', lines), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task UnknownSwitch_FailsClosedWithCurrentSilentExitContract()
+    {
+        var result = await RunHookProcessAsync(
+            ["--future-provider-hook"],
+            stdin: null,
+            diagnosticPath: null);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(string.Empty, result.StandardOutput);
+        Assert.Equal(string.Empty, result.StandardError);
     }
 
     private static async Task<ProcessResult> RunHookProcessAsync(

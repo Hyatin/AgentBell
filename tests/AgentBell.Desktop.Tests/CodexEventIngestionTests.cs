@@ -9,6 +9,7 @@ public sealed class CodexEventIngestionTests
     [Fact]
     public async Task HandleAsync_SanitizedPermissionRequest_DefaultOffReturns202AndRemainsNonNotifying()
     {
+        const string Sentinel = "AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A";
         var sanitized = new AgentBell.Hook.PermissionRequestSanitizer().Sanitize(
             new AgentBell.Contracts.CodexPermissionRequestPayload
             {
@@ -16,7 +17,7 @@ public sealed class CodexEventIngestionTests
                 SessionId = "private-session",
                 TurnId = "private-turn",
                 ToolUseId = "private-tool-use",
-                WorkingDirectory = "C:\\Private\\AgentBell",
+                WorkingDirectory = $"C:\\{Sentinel}\\AgentBell",
                 ToolName = "Bash",
             });
 
@@ -39,6 +40,11 @@ public sealed class CodexEventIngestionTests
         Assert.Equal("command", diagnostic.ToolCategory);
         Assert.Equal(12, diagnostic.SessionIdHash?.Length);
         Assert.Equal("permission_observed_off", diagnostic.Result);
+        Assert.DoesNotContain(Sentinel, sanitized.Json, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            Sentinel,
+            JsonSerializer.Serialize(diagnostic),
+            StringComparison.Ordinal);
     }
 
     [Fact]

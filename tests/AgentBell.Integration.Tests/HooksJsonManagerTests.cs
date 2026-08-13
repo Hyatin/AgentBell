@@ -24,18 +24,28 @@ public sealed class HooksJsonManagerTests
         Assert.Equal("command", handler!["type"]!.GetValue<string>());
         Assert.Equal(Commands.Command, handler["command"]!.GetValue<string>());
         Assert.Equal(Commands.CommandWindows, handler["commandWindows"]!.GetValue<string>());
+        Assert.Equal(3, handler["timeout"]!.GetValue<int>());
+        Assert.Equal(Commands.Stop.StatusMessage, handler["statusMessage"]!.GetValue<string>());
         var permissionHandler = Assert.Single(
             Assert.Single(root["hooks"]!["PermissionRequest"]!.AsArray())!["hooks"]!.AsArray());
         Assert.Equal(Commands.PermissionRequest.Command, permissionHandler!["command"]!.GetValue<string>());
         Assert.Equal(
             Commands.PermissionRequest.CommandWindows,
             permissionHandler["commandWindows"]!.GetValue<string>());
+        Assert.Equal(3, permissionHandler["timeout"]!.GetValue<int>());
+        Assert.Equal(
+            Commands.PermissionRequest.StatusMessage,
+            permissionHandler["statusMessage"]!.GetValue<string>());
         var postToolUseHandler = Assert.Single(
             Assert.Single(root["hooks"]!["PostToolUse"]!.AsArray())!["hooks"]!.AsArray());
         Assert.Equal(Commands.PostToolUse.Command, postToolUseHandler!["command"]!.GetValue<string>());
         Assert.Equal(
             Commands.PostToolUse.CommandWindows,
             postToolUseHandler["commandWindows"]!.GetValue<string>());
+        Assert.Equal(3, postToolUseHandler["timeout"]!.GetValue<int>());
+        Assert.Equal(
+            Commands.PostToolUse.StatusMessage,
+            postToolUseHandler["statusMessage"]!.GetValue<string>());
         Assert.Equal(3, result.AgentBellHookCount);
     }
 

@@ -9,21 +9,23 @@ public sealed class PermissionRequestHookTests
     [Fact]
     public async Task RunAsync_ValidRequest_ForwardsOnlySanitizedPayloadAndStaysSilent()
     {
-        const string RawCommand = "private-command-value";
-        const string Description = "private-description-value";
+        const string Sentinel = "AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A";
         const string Json = """
             {
               "hook_event_name":"PermissionRequest",
               "session_id":"private-session-id",
               "turn_id":"private-turn-id",
               "tool_use_id":"private-tool-use-id",
-              "cwd":"C:\\Private\\AgentBell",
+              "cwd":"C:\\AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A\\AgentBell",
               "permission_mode":"ask",
               "tool_name":"Bash",
               "tool_input":{
-                "command":"private-command-value",
-                "description":"private-description-value"
-              }
+                "command":"AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A",
+                "description":"AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A",
+                "prompt":"AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A"
+              },
+              "tool_output":"AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A",
+              "unknown":"AGENTBELL_SECRET_SHOULD_NEVER_ESCAPE_7F3A"
             }
             """;
         var forwarder = new CapturingForwarder(ForwardResult.Accepted(202));
@@ -52,8 +54,7 @@ public sealed class PermissionRequestHookTests
         Assert.Equal(12, root.GetProperty("sessionIdHash").GetString()?.Length);
         Assert.Equal(12, root.GetProperty("turnIdHash").GetString()?.Length);
         Assert.Equal(12, root.GetProperty("toolUseIdHash").GetString()?.Length);
-        Assert.DoesNotContain(RawCommand, forwarded, StringComparison.Ordinal);
-        Assert.DoesNotContain(Description, forwarded, StringComparison.Ordinal);
+        Assert.DoesNotContain(Sentinel, forwarded, StringComparison.Ordinal);
         Assert.DoesNotContain("private-session-id", forwarded, StringComparison.Ordinal);
         Assert.DoesNotContain("private-turn-id", forwarded, StringComparison.Ordinal);
         Assert.DoesNotContain("C:\\Private", forwarded, StringComparison.Ordinal);
@@ -63,9 +64,9 @@ public sealed class PermissionRequestHookTests
         Assert.Equal("codex-permission-request", logger.Event?.EventType);
         Assert.Equal("command", logger.Event?.ToolCategory);
         var diagnostic = JsonSerializer.Serialize(logger.Event);
-        Assert.DoesNotContain(RawCommand, diagnostic, StringComparison.Ordinal);
-        Assert.DoesNotContain(Description, diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain(Sentinel, diagnostic, StringComparison.Ordinal);
         Assert.DoesNotContain("private-session-id", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain(Sentinel, stdout.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -99,6 +100,16 @@ public sealed class PermissionRequestHookTests
         var second = new PermissionRequestSanitizer().Sanitize(payload).Event;
 
         Assert.Equal(first.EventId, second.EventId);
+        Assert.Equal("codex-action:fa4afc83bf185000bb870ddb", first.EventId);
+        Assert.Equal("e18c78136e8e", first.SessionIdHash);
+        Assert.Equal("04d186e38f9a", first.TurnIdHash);
+        Assert.Equal("f4195d80a65d", first.ToolUseIdHash);
+        Assert.Equal(
+            "92095e4b36669f468e1bb430",
+            HookDiagnosticEvent.Create(
+                HookEventMetadata.FromPermissionRequest(payload, first),
+                ForwardResult.Accepted(202),
+                TimeSpan.Zero).EventIdHash);
         Assert.Equal(first.SessionIdHash, second.SessionIdHash);
         Assert.Equal(first.TurnIdHash, second.TurnIdHash);
         Assert.Equal(first.ToolUseIdHash, second.ToolUseIdHash);
