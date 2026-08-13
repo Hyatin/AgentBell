@@ -40,7 +40,7 @@ jobs:
       - name: Build Release
         run: dotnet build .\AgentBell.sln -c Release --no-restore
       - name: Test Release
-        run: dotnet test .\AgentBell.sln -c Release --no-build
+        run: .\scripts\test-windows.ps1 -Configuration Release -NoBuild
 
   android:
     name: Android keyless verification

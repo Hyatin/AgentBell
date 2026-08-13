@@ -148,6 +148,34 @@ public sealed class InstallerSourceTests
     }
 
     [Fact]
+    public void WindowsTests_UseOneCrossAssemblySerialOrchestration()
+    {
+        var root = FindRepositoryRoot();
+        var helper = File.ReadAllText(Path.Combine(root, "scripts", "test-windows.ps1"));
+        var releaseBuild = File.ReadAllText(Path.Combine(root, "scripts", "build-release.ps1"));
+        var ci = File.ReadAllText(Path.Combine(root, ".github", "workflows", "ci.yml"));
+
+        foreach (var project in new[]
+                 {
+                     "AgentBell.Contracts.Tests",
+                     "AgentBell.Localization.Tests",
+                     "AgentBell.Hook.Tests",
+                     "AgentBell.Desktop.Tests",
+                     "AgentBell.Integration.Tests",
+                     "AgentBell.Tray.Tests",
+                 })
+        {
+            Assert.Contains($"tests\\{project}\\{project}.csproj", helper, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("test-windows.ps1", releaseBuild, StringComparison.Ordinal);
+        Assert.Contains(".\\scripts\\test-windows.ps1", ci, StringComparison.Ordinal);
+        Assert.DoesNotContain("dotnet test .\\AgentBell.sln", ci, StringComparison.Ordinal);
+        Assert.Contains("foreach ($relativeProject in $testProjects)", helper, StringComparison.Ordinal);
+        Assert.DoesNotContain("DisableParallelization", helper, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void InstallerIntegrationTest_ExercisesEnglishAndSimplifiedChineseSetupLanguages()
     {
         var root = FindRepositoryRoot();

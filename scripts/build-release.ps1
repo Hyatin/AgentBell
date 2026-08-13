@@ -443,7 +443,10 @@ try {
     Invoke-Checked 'dotnet' @('format', $solution, '--verify-no-changes') 'dotnet format failed.'
     Invoke-Checked 'dotnet' @('restore', $solution) 'dotnet restore failed.'
     Invoke-Checked 'dotnet' @('build', $solution, '-c', 'Release', '--no-restore') 'Release build failed.'
-    Invoke-Checked 'dotnet' @('test', $solution, '-c', 'Release', '--no-build') 'Windows tests failed.'
+    & (Join-Path $PSScriptRoot 'test-windows.ps1') `
+        -Solution $solution `
+        -Configuration Release `
+        -NoBuild
 
     $javaHome = Resolve-JavaHome
     $androidSdk = Resolve-AndroidSdk
