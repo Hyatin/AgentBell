@@ -34,15 +34,17 @@ public static class CodexEventIngestion
     public static async Task HandleAsync(
         HttpContext context,
         EventPipeline pipeline,
+        CodexPipelineSubmissionFactory submissionFactory,
         IDesktopDiagnosticLogger diagnosticLogger)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(pipeline);
+        ArgumentNullException.ThrowIfNull(submissionFactory);
         ArgumentNullException.ThrowIfNull(diagnosticLogger);
 
         var stopwatch = Stopwatch.StartNew();
-        EventAcceptanceResult? acceptance = null;
-        PermissionResolutionResult? resolution = null;
+        EventPipelineResult? pipelineResult = null;
+        string? compatibilityEventType = null;
         var statusCode = StatusCodes.Status500InternalServerError;
         var persistenceSucceeded = true;
         try
@@ -87,24 +89,27 @@ public static class CodexEventIngestion
                 return;
             }
 
+            EventPipelineSubmission submission;
             if (parseResult.PostToolUse is not null)
             {
-                resolution = await pipeline.ResolveAsync(
-                    parseResult.PostToolUse,
-                    context.RequestAborted).ConfigureAwait(false);
-                persistenceSucceeded = resolution.PersistenceSucceeded;
+                compatibilityEventType = SanitizedPostToolUseEvent.PostToolUseEventType;
+                submission = submissionFactory.Create(parseResult.PostToolUse);
+            }
+            else if (parseResult.ActionRequired is not null)
+            {
+                compatibilityEventType = SanitizedActionRequiredEvent.PermissionRequestEventType;
+                submission = submissionFactory.Create(parseResult.ActionRequired);
             }
             else
             {
-                acceptance = parseResult.ActionRequired is not null
-                    ? await pipeline.AcceptAsync(
-                        parseResult.ActionRequired,
-                        context.RequestAborted).ConfigureAwait(false)
-                    : await pipeline.AcceptAsync(
-                        parseResult.Stop!,
-                        context.RequestAborted).ConfigureAwait(false);
-                persistenceSucceeded = acceptance.PersistenceSucceeded;
+                compatibilityEventType = "codex-stop";
+                submission = submissionFactory.Create(parseResult.Stop!);
             }
+
+            pipelineResult = await pipeline.AcceptAsync(
+                submission,
+                context.RequestAborted).ConfigureAwait(false);
+            persistenceSucceeded = pipelineResult.PersistenceSucceeded;
             statusCode = StatusCodes.Status202Accepted;
         }
         catch (BadHttpRequestException exception)
@@ -129,8 +134,8 @@ public static class CodexEventIngestion
             context.Response.StatusCode = statusCode;
             TryRecordDiagnostic(
                 diagnosticLogger,
-                acceptance,
-                resolution,
+                pipelineResult,
+                compatibilityEventType,
                 statusCode,
                 persistenceSucceeded,
                 stopwatch.Elapsed);
@@ -350,8 +355,8 @@ public static class CodexEventIngestion
 
     private static void TryRecordDiagnostic(
         IDesktopDiagnosticLogger logger,
-        EventAcceptanceResult? acceptance,
-        PermissionResolutionResult? resolution,
+        EventPipelineResult? pipelineResult,
+        string? compatibilityEventType,
         int statusCode,
         bool persistenceSucceeded,
         TimeSpan elapsed)
@@ -361,43 +366,49 @@ public static class CodexEventIngestion
             logger.Record(new DesktopDiagnosticEvent
             {
                 Timestamp = DateTimeOffset.UtcNow,
-                EventType = resolution is not null
-                    ? SanitizedPostToolUseEvent.PostToolUseEventType
-                    : acceptance is null
-                        ? null
-                    : acceptance.Event.ActionType == AgentActionTypes.PermissionRequired
-                        && acceptance.Event.ToolCategory != AgentToolCategories.None
-                            ? SanitizedActionRequiredEvent.PermissionRequestEventType
-                            : "codex-stop",
-                ThreadIdHash = acceptance?.Event.ActionType == AgentActionTypes.PermissionRequired
+                EventType = compatibilityEventType,
+                ThreadIdHash = compatibilityEventType ==
+                    SanitizedActionRequiredEvent.PermissionRequestEventType
                     ? null
-                    : acceptance?.Event.ThreadIdHash,
-                SessionIdHash = resolution?.SessionIdHash
-                    ?? (acceptance?.Event.ActionType == AgentActionTypes.PermissionRequired
-                        ? acceptance?.Event.ThreadIdHash
-                        : null),
-                TurnIdHash = resolution?.TurnIdHash ?? acceptance?.Event.TurnIdHash,
-                ToolCategory = resolution?.ToolCategory ?? acceptance?.Event.ToolCategory,
-                EventIdHash = acceptance is null
+                    : pipelineResult?.Event?.ThreadIdHash,
+                SessionIdHash = compatibilityEventType switch
+                {
+                    SanitizedPostToolUseEvent.PostToolUseEventType =>
+                        pipelineResult?.LifecycleResolution.SessionIdHash,
+                    SanitizedActionRequiredEvent.PermissionRequestEventType =>
+                        pipelineResult?.NormalizedEvent?.SessionIdHash,
+                    _ => null,
+                },
+                TurnIdHash = pipelineResult?.LifecycleResolution.TurnIdHash
+                    ?? pipelineResult?.NormalizedEvent?.TurnIdHash,
+                ToolCategory = pipelineResult?.LifecycleResolution.ToolCategory
+                    ?? pipelineResult?.NormalizedEvent?.ToolCategory,
+                EventIdHash = pipelineResult?.NormalizedEvent is null
                     ? null
-                    : IdentifierHash.CreateFingerprint(acceptance.Event.EventId),
-                ClassifiedAs = acceptance?.Event.ActionType,
-                MatchedRuleId = acceptance?.MatchedRuleId,
-                ConfidenceBand = acceptance?.ConfidenceBand,
-                IsDuplicate = acceptance?.IsDuplicate ?? false,
+                    : IdentifierHash.CreateFingerprint(pipelineResult.NormalizedEvent.EventId),
+                ClassifiedAs = ToLegacyActionType(
+                    compatibilityEventType,
+                    pipelineResult?.NormalizedEvent),
+                MatchedRuleId = pipelineResult?.NormalizedEvent?.Classification?.RuleId,
+                ConfidenceBand = ToLegacyConfidenceBand(
+                    compatibilityEventType,
+                    pipelineResult?.NormalizedEvent?.Classification?.Confidence),
+                IsDuplicate = pipelineResult?.IsDuplicate ?? false,
                 HttpStatusCode = statusCode,
                 ElapsedMilliseconds = Math.Max(0, (long)elapsed.TotalMilliseconds),
                 PersistenceSucceeded = persistenceSucceeded,
-                EventCount = acceptance?.EventCount ?? 0,
-                Result = resolution is null
-                    ? acceptance?.PermissionState switch
+                EventCount = compatibilityEventType == SanitizedPostToolUseEvent.PostToolUseEventType
+                    ? 0
+                    : pipelineResult?.EventCount ?? 0,
+                Result = compatibilityEventType != SanitizedPostToolUseEvent.PostToolUseEventType
+                    ? pipelineResult?.LifecycleState switch
                     {
-                        PermissionLifecycleState.Observed => "permission_observed_off",
-                        PermissionLifecycleState.Published => "permission_published",
+                        EventLifecycleState.Tracked => "permission_observed_off",
+                        EventLifecycleState.Delivered => "permission_published",
                         _ => null,
                     }
-                    : resolution.Matched
-                        ? resolution.PublishedResolved > 0
+                    : pipelineResult?.LifecycleResolution.Matched == true
+                        ? pipelineResult.LifecycleResolution.DeliveredResolved > 0
                             ? "resolved_published"
                             : "resolved_observed"
                         : "no_match",
@@ -408,6 +419,42 @@ public static class CodexEventIngestion
             // Diagnostics cannot affect the HTTP result.
         }
     }
+
+    private static string? ToLegacyActionType(
+        string? compatibilityEventType,
+        NormalizedAgentEvent? normalizedEvent)
+    {
+        if (compatibilityEventType == SanitizedActionRequiredEvent.PermissionRequestEventType)
+        {
+            return AgentActionTypes.PermissionRequired;
+        }
+
+        return normalizedEvent?.SemanticEventKind switch
+        {
+            SemanticEventKind.TurnCompleted => AgentActionTypes.None,
+            SemanticEventKind.PermissionObserved or SemanticEventKind.PermissionRequired =>
+                AgentActionTypes.PermissionRequired,
+            SemanticEventKind.InputRequired => AgentActionTypes.InputRequired,
+            SemanticEventKind.ConfirmationRequired => AgentActionTypes.ConfirmationRequired,
+            SemanticEventKind.AttentionRequired => AgentActionTypes.AttentionRequired,
+            null => null,
+            _ => null,
+        };
+    }
+
+    private static string? ToLegacyConfidenceBand(
+        string? compatibilityEventType,
+        ClassificationConfidence? confidence) => confidence switch
+        {
+            ClassificationConfidence.High => "high",
+            ClassificationConfidence.Medium => "medium",
+            ClassificationConfidence.Low => "low",
+            null when compatibilityEventType == SanitizedActionRequiredEvent.PermissionRequestEventType =>
+                "structured",
+            null when compatibilityEventType == "codex-stop" => "none",
+            null => null,
+            _ => null,
+        };
 
     private enum RequestBodyStatus
     {

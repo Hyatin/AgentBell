@@ -45,17 +45,17 @@ public static class DesktopHost
         builder.Services.AddSingleton(runtimeOptions);
         builder.Services.AddSingleton<IEventStore>(services =>
             new JsonEventStore(services.GetRequiredService<DesktopRuntimeOptions>().EventsFilePath));
-        builder.Services.AddSingleton<CodexEventTransformer>();
+        builder.Services.AddSingleton<AgentEventProjector>();
         builder.Services.AddSingleton(eventPublisher ?? NoOpEventPublisher.Instance);
         builder.Services.AddSingleton(notificationSettings ?? new DesktopNotificationSettingsState());
         builder.Services.AddSingleton(timeProvider ?? TimeProvider.System);
         builder.Services.AddSingleton<CodexActionRequestClassifier>();
+        builder.Services.AddSingleton<CodexPipelineSubmissionFactory>();
         builder.Services.AddSingleton<EventPipeline>(services => new EventPipeline(
             services.GetRequiredService<IEventStore>(),
-            services.GetRequiredService<CodexEventTransformer>(),
+            services.GetRequiredService<AgentEventProjector>(),
             services.GetRequiredService<IEventPublisher>(),
-            services.GetRequiredService<TimeProvider>(),
-            services.GetRequiredService<DesktopNotificationSettingsState>()));
+            services.GetRequiredService<TimeProvider>()));
         builder.Services.AddSingleton(
             diagnosticLogger ?? DesktopDiagnosticLoggerFactory.CreateFromEnvironment());
 

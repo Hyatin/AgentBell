@@ -465,7 +465,7 @@ public sealed class LanHostIntegrationTests
         {
             using var pairing = await TestPairingFactory.CreateAsync(directory);
             var store = new InMemoryEventStore();
-            var pipeline = new EventPipeline(store, new CodexEventTransformer());
+            var pipeline = new EventPipeline(store);
             await pipeline.InitializeAsync(CancellationToken.None);
             var logger = new CollectingDesktopDiagnosticLogger();
             var manager = new WebSocketConnectionManager(logger);
@@ -814,12 +814,14 @@ public sealed class LanHostIntegrationTests
     private sealed class LanTestServer : IAsyncDisposable
     {
         private readonly string _directory;
+        private readonly CodexPipelineSubmissionFactory _submissionFactory;
 
         private LanTestServer(
             string directory,
             int port,
             PairingConfigurationSession pairing,
             EventPipeline pipeline,
+            CodexPipelineSubmissionFactory submissionFactory,
             CollectingDesktopDiagnosticLogger logger,
             WebSocketConnectionManager manager,
             Microsoft.AspNetCore.Builder.WebApplication application)
@@ -828,6 +830,7 @@ public sealed class LanHostIntegrationTests
             Port = port;
             Pairing = pairing;
             Pipeline = pipeline;
+            _submissionFactory = submissionFactory;
             Logger = logger;
             Manager = manager;
             Application = application;
@@ -886,9 +889,9 @@ public sealed class LanHostIntegrationTests
                 });
                 var pipeline = new EventPipeline(
                     new InMemoryEventStore(),
-                    new CodexEventTransformer(),
-                    new WebSocketEventPublisher(manager),
-                    notificationSettings: notificationSettings);
+                    eventPublisher: new WebSocketEventPublisher(manager));
+                var submissionFactory = new CodexPipelineSubmissionFactory(
+                    settings: notificationSettings);
                 await pipeline.InitializeAsync(CancellationToken.None);
                 application = LanHost.BuildForTesting(
                     IPAddress.Loopback,
@@ -918,6 +921,7 @@ public sealed class LanHostIntegrationTests
                     listener.Port,
                     pairing,
                     pipeline,
+                    submissionFactory,
                     logger,
                     manager,
                     application);
@@ -935,30 +939,31 @@ public sealed class LanHostIntegrationTests
             }
         }
 
-        public Task<EventAcceptanceResult> AcceptAsync(string turnId) =>
+        public Task<EventPipelineResult> AcceptAsync(string turnId) =>
             Pipeline.AcceptAsync(
-                new CodexStopHookPayload
+                _submissionFactory.Create(new CodexStopHookPayload
                 {
                     HookEventName = "Stop",
                     SessionId = "lan-test-session",
                     TurnId = turnId,
                     WorkingDirectory = "C:\\Private\\AgentBell",
                     LastAssistantMessage = "完成 M2 🔔",
-                },
+                }),
                 CancellationToken.None);
 
-        public Task<EventAcceptanceResult> AcceptActionAsync() =>
+        public Task<EventPipelineResult> AcceptActionAsync() =>
             Pipeline.AcceptAsync(
-                new SanitizedActionRequiredEvent
-                {
-                    EventId = "codex-action:00112233445566778899aabb",
-                    SessionIdHash = "001122334455",
-                    TurnIdHash = "66778899aabb",
-                    ToolUseIdHash = "ccddee112233",
-                    Project = "AgentBell",
-                    ToolCategory = AgentToolCategories.Command,
-                    OccurredAt = DateTimeOffset.Parse("2026-08-06T00:00:00Z"),
-                },
+                _submissionFactory.Create(
+                    new SanitizedActionRequiredEvent
+                    {
+                        EventId = "codex-action:00112233445566778899aabb",
+                        SessionIdHash = "001122334455",
+                        TurnIdHash = "66778899aabb",
+                        ToolUseIdHash = "ccddee112233",
+                        Project = "AgentBell",
+                        ToolCategory = AgentToolCategories.Command,
+                        OccurredAt = DateTimeOffset.Parse("2026-08-06T00:00:00Z"),
+                    }),
                 CancellationToken.None);
 
         public async Task<ClientWebSocket> ConnectWithQueryAsync(

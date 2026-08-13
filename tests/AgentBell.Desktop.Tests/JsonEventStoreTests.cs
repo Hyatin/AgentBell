@@ -96,19 +96,18 @@ public sealed class JsonEventStoreTests
         try
         {
             var pipeline = new EventPipeline(
-                new JsonEventStore(path),
-                new CodexEventTransformer());
+                new JsonEventStore(path));
             await pipeline.InitializeAsync(CancellationToken.None);
 
             await pipeline.AcceptAsync(
-                new CodexStopHookPayload
+                new CodexPipelineSubmissionFactory().Create(new CodexStopHookPayload
                 {
                     HookEventName = "Stop",
                     SessionId = SessionId,
                     TurnId = TurnId,
                     WorkingDirectory = FullPath,
                     LastAssistantMessage = fullMessage,
-                },
+                }),
                 CancellationToken.None);
 
             var persisted = await File.ReadAllTextAsync(path);
@@ -187,19 +186,19 @@ public sealed class JsonEventStoreTests
                 loaded.Events.Select(item => item.EventId));
             Assert.All(loaded.Events, item => Assert.Equal("codex", item.Agent));
 
-            await using var pipeline = new EventPipeline(store, new CodexEventTransformer());
+            await using var pipeline = new EventPipeline(store);
             await pipeline.InitializeAsync(CancellationToken.None);
             var accepted = await pipeline.AcceptAsync(
-                new CodexStopHookPayload
+                new CodexPipelineSubmissionFactory().Create(new CodexStopHookPayload
                 {
                     HookEventName = "Stop",
                     SessionId = "restart-session",
                     TurnId = "restart-turn",
                     LastAssistantMessage = "Synthetic restart completion.",
-                },
+                }),
                 CancellationToken.None);
 
-            Assert.Equal(43, accepted.Event.Sequence);
+            Assert.Equal(43, Assert.IsType<AgentEvent>(accepted.Event).Sequence);
             Assert.Equal(3, (await pipeline.GetHistoryAsync(0, CancellationToken.None)).EventCount);
         }
         finally

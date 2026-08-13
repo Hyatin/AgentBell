@@ -66,6 +66,17 @@ public sealed class ProviderNeutralEventsTests
     }
 
     [Fact]
+    public void Classification_AcceptsExisting07StableRuleIdWithoutChangingSourceEventKind()
+    {
+        var classification = new EventClassification(
+            "confirm_en_please",
+            ClassificationConfidence.High);
+
+        Assert.Equal("confirm_en_please", classification.RuleId);
+        Assert.Throws<ArgumentException>(() => new SourceEventKind("confirm_en_please"));
+    }
+
+    [Fact]
     public void RequiredFields_RejectUninitializedOrMissingValues()
     {
         Assert.Throws<InvalidOperationException>(() => new NormalizedAgentEvent(

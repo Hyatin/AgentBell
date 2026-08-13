@@ -2,88 +2,39 @@ using AgentBell.Contracts;
 
 namespace AgentBell.Desktop;
 
-/// <summary>Stable lifecycle states for one sanitized permission request.</summary>
-public enum PermissionLifecycleState
-{
-    /// <summary>The request was observed while permission notifications were off.</summary>
-    Observed,
-
-    /// <summary>The request occurrence was persisted and published.</summary>
-    Published,
-
-    /// <summary>A matching lifecycle event completed the request lifecycle.</summary>
-    Resolved,
-
-    /// <summary>The bounded state cache evicted the lifecycle entry.</summary>
-    Expired,
-}
-
-/// <summary>Contains only sanitized, content-free permission lifecycle state.</summary>
-public sealed record PermissionLifecycle
-{
-    /// <summary>Gets the deterministic sanitized event identifier.</summary>
-    public required string EventId { get; init; }
-
-    /// <summary>Gets the irreversible session hash.</summary>
-    public string? SessionIdHash { get; init; }
-
-    /// <summary>Gets the irreversible turn hash.</summary>
-    public string? TurnIdHash { get; init; }
-
-    /// <summary>Gets the irreversible tool-use hash when available.</summary>
-    public string? ToolUseIdHash { get; init; }
-
-    /// <summary>Gets the allow-listed tool category.</summary>
-    public required string ToolCategory { get; init; }
-
-    /// <summary>Gets only the final working-directory segment.</summary>
-    public string? Project { get; init; }
-
-    /// <summary>Gets when Desktop received the sanitized request.</summary>
-    public required DateTimeOffset ReceivedAt { get; init; }
-
-    /// <summary>Gets the current lifecycle state.</summary>
-    public required PermissionLifecycleState State { get; init; }
-}
-
-/// <summary>Serializes event acceptance, permission lifecycle correlation, and persistence.</summary>
+/// <summary>Serializes provider-neutral event acceptance, lifecycle correlation, and persistence.</summary>
 public sealed class EventPipeline : IAsyncDisposable
 {
-    /// <summary>The maximum number of event identifiers retained for deduplication.</summary>
+    /// <summary>The maximum number of identifiers retained for deduplication and lifecycle state.</summary>
     public const int DeduplicationCapacity = 1000;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly IEventStore _eventStore;
-    private readonly CodexEventTransformer _transformer;
+    private readonly AgentEventProjector _projector;
     private readonly IEventPublisher _eventPublisher;
-    private readonly DesktopNotificationSettingsState _notificationSettings;
     private readonly TimeProvider _timeProvider;
     private readonly LruEventIdSet _deduplication = new(DeduplicationCapacity);
     private readonly List<AgentEvent> _recentEvents = [];
-    private readonly Dictionary<string, PermissionEntry> _permissions =
-        new(StringComparer.Ordinal);
-    private readonly LinkedList<string> _permissionOrder = [];
+    private readonly EventLifecycleTracker _lifecycle = new(DeduplicationCapacity);
 
     private long _sequence;
     private bool _initialized;
     private bool _disposed;
 
-    /// <summary>Initializes the pipeline with its store, transformer, publisher, settings, and clock.</summary>
+    /// <summary>Initializes the generic pipeline with persistence, projection, publishing, and time.</summary>
     public EventPipeline(
         IEventStore eventStore,
-        CodexEventTransformer transformer,
+        AgentEventProjector? projector = null,
         IEventPublisher? eventPublisher = null,
-        TimeProvider? timeProvider = null,
-        DesktopNotificationSettingsState? notificationSettings = null)
+        TimeProvider? timeProvider = null)
     {
         _eventStore = eventStore ?? throw new ArgumentNullException(nameof(eventStore));
-        _transformer = transformer ?? throw new ArgumentNullException(nameof(transformer));
+        _projector = projector ?? new AgentEventProjector();
         _eventPublisher = eventPublisher ?? NoOpEventPublisher.Instance;
-        _notificationSettings = notificationSettings ?? new DesktopNotificationSettingsState();
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    /// <summary>Restores deduplication, sequence, and already-published permission state.</summary>
+    /// <summary>Restores deduplication, sequence, and deliverable lifecycle state.</summary>
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -101,17 +52,15 @@ public sealed class EventPipeline : IAsyncDisposable
                 _recentEvents.Add(item);
                 _deduplication.TryAdd(item.EventId);
                 _sequence = Math.Max(_sequence, item.Sequence);
-                if (item.ActionType == AgentActionTypes.PermissionRequired)
+                if (_projector.TryCreateRestoredLifecycle(item, out var registration))
                 {
-                    AddRestoredPermission(item);
+                    _lifecycle.Register(registration!);
                 }
             }
 
             if (_recentEvents.Count > JsonEventStore.MaxRecentEvents)
             {
-                _recentEvents.RemoveRange(
-                    0,
-                    _recentEvents.Count - JsonEventStore.MaxRecentEvents);
+                _recentEvents.RemoveRange(0, _recentEvents.Count - JsonEventStore.MaxRecentEvents);
             }
 
             _initialized = true;
@@ -122,86 +71,74 @@ public sealed class EventPipeline : IAsyncDisposable
         }
     }
 
-    /// <summary>Accepts Stop, resolves matching permissions, then publishes normal completion.</summary>
-    public async Task<EventAcceptanceResult> AcceptAsync(
-        CodexStopHookPayload payload,
+    /// <summary>Executes one fully sanitized provider-neutral submission.</summary>
+    public async Task<EventPipelineResult> AcceptAsync(
+        EventPipelineSubmission submission,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(payload);
-        var transformed = _transformer.TransformWithClassification(payload);
-
+        ArgumentNullException.ThrowIfNull(submission);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureInitialized();
-            await ResolveMatchingPermissionsLockedAsync(
-                transformed.Event.ThreadIdHash,
-                transformed.Event.TurnIdHash,
-                toolUseIdHash: null,
-                toolCategory: null,
-                resolveAllInTurn: true,
+            var resolution = await ExecuteResolutionLockedAsync(
+                submission.ProviderId,
+                submission.Lifecycle,
                 cancellationToken).ConfigureAwait(false);
-            return await AcceptCandidateLockedAsync(
-                transformed.Event,
-                transformed.MatchedRuleId,
-                transformed.ConfidenceBand,
-                cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
 
-    /// <summary>Observes or immediately publishes one unique sanitized permission request.</summary>
-    public async Task<EventAcceptanceResult> AcceptAsync(
-        SanitizedActionRequiredEvent payload,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(payload);
-        var candidate = _transformer.Transform(payload);
-
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            EnsureInitialized();
-            if (_permissions.TryGetValue(candidate.EventId, out var existing)
-                || _deduplication.Contains(candidate.EventId))
+            var normalizedEvent = submission.NormalizedEvent;
+            if (normalizedEvent is null)
             {
-                return new EventAcceptanceResult(
+                return new EventPipelineResult(
+                    null,
+                    null,
+                    IsDuplicate: false,
+                    resolution.PersistenceSucceeded,
+                    _recentEvents.Count,
+                    null,
+                    resolution);
+            }
+
+            var candidate = _projector.Project(normalizedEvent, submission.Notification, sequence: 0);
+            if (!_deduplication.TryAdd(normalizedEvent.EventId))
+            {
+                return new EventPipelineResult(
                     candidate,
+                    normalizedEvent,
                     IsDuplicate: true,
                     PersistenceSucceeded: true,
                     _recentEvents.Count,
-                    ConfidenceBand: "structured",
-                    PermissionState: existing?.Snapshot.State);
+                    _lifecycle.Get(submission.ProviderId, normalizedEvent.EventId)?.State,
+                    resolution);
             }
 
-            _deduplication.TryAdd(candidate.EventId);
-            EnsurePermissionCapacityLocked();
-            var shouldPublish = _notificationSettings.Current.PermissionNotificationPolicy ==
-                PermissionNotificationPolicy.AlwaysNotify;
-            var accepted = shouldPublish
-                ? candidate with { Sequence = checked(++_sequence) }
-                : candidate;
-            var snapshot = new PermissionLifecycle
+            AgentEvent? accepted = null;
+            if (candidate is not null)
             {
-                EventId = candidate.EventId,
-                SessionIdHash = payload.SessionIdHash,
-                TurnIdHash = payload.TurnIdHash,
-                ToolUseIdHash = payload.ToolUseIdHash,
-                ToolCategory = payload.ToolCategory,
-                Project = payload.Project,
-                ReceivedAt = _timeProvider.GetUtcNow(),
-                State = shouldPublish
-                    ? PermissionLifecycleState.Published
-                    : PermissionLifecycleState.Observed,
-            };
-            var orderNode = _permissionOrder.AddLast(candidate.EventId);
-            _permissions.Add(candidate.EventId, new PermissionEntry(snapshot, accepted, orderNode));
+                accepted = candidate with { Sequence = checked(++_sequence) };
+            }
+
+            EventLifecycleState? lifecycleState = null;
+            if (submission.Lifecycle.Kind == LifecycleDirectiveKind.Register)
+            {
+                lifecycleState = accepted is null
+                    ? EventLifecycleState.Tracked
+                    : EventLifecycleState.Delivered;
+                _lifecycle.Register(new EventLifecycleRegistration(
+                    submission.ProviderId,
+                    normalizedEvent.EventId,
+                    normalizedEvent.SessionIdHash,
+                    normalizedEvent.TurnIdHash,
+                    normalizedEvent.ToolUseIdHash,
+                    normalizedEvent.ToolCategory,
+                    normalizedEvent.Project,
+                    _timeProvider.GetUtcNow(),
+                    lifecycleState.Value,
+                    accepted));
+            }
 
             var persistenceSucceeded = true;
-            if (shouldPublish)
+            if (accepted is not null)
             {
                 AddRecentEventLocked(accepted);
                 persistenceSucceeded = await PersistAndPublishLockedAsync(
@@ -209,13 +146,14 @@ public sealed class EventPipeline : IAsyncDisposable
                     cancellationToken).ConfigureAwait(false);
             }
 
-            return new EventAcceptanceResult(
+            return new EventPipelineResult(
                 accepted,
+                normalizedEvent,
                 IsDuplicate: false,
                 persistenceSucceeded,
                 _recentEvents.Count,
-                ConfidenceBand: "structured",
-                PermissionState: snapshot.State);
+                lifecycleState,
+                resolution);
         }
         finally
         {
@@ -223,40 +161,19 @@ public sealed class EventPipeline : IAsyncDisposable
         }
     }
 
-    /// <summary>Correlates one supported PostToolUse lifecycle observation.</summary>
-    public async Task<PermissionResolutionResult> ResolveAsync(
-        SanitizedPostToolUseEvent payload,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(payload);
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            EnsureInitialized();
-            return await ResolveMatchingPermissionsLockedAsync(
-                payload.SessionIdHash,
-                payload.TurnIdHash,
-                payload.ToolUseIdHash,
-                payload.ToolCategory,
-                resolveAllInTurn: false,
-                cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    /// <summary>Returns one content-free permission lifecycle snapshot for deterministic tests.</summary>
-    public async Task<PermissionLifecycle?> GetPermissionAsync(
+    /// <summary>Returns one content-free provider-scoped lifecycle snapshot.</summary>
+    public async Task<EventLifecycleSnapshot?> GetLifecycleAsync(
+        ProviderId providerId,
         string eventId,
         CancellationToken cancellationToken)
     {
+        _ = providerId.Value;
         ArgumentException.ThrowIfNullOrWhiteSpace(eventId);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return _permissions.TryGetValue(eventId, out var entry) ? entry.Snapshot : null;
+            EnsureInitialized();
+            return _lifecycle.Get(providerId, eventId);
         }
         finally
         {
@@ -298,104 +215,41 @@ public sealed class EventPipeline : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    private async Task<EventAcceptanceResult> AcceptCandidateLockedAsync(
-        AgentEvent candidate,
-        string? matchedRuleId,
-        string? confidenceBand,
+    private async Task<LifecycleResolutionResult> ExecuteResolutionLockedAsync(
+        ProviderId providerId,
+        LifecycleDirective directive,
         CancellationToken cancellationToken)
     {
-        if (!_deduplication.TryAdd(candidate.EventId))
+        if (directive.Kind is not LifecycleDirectiveKind.ResolveOne
+            and not LifecycleDirectiveKind.ResolveAllInTurn)
         {
-            return new EventAcceptanceResult(
-                candidate,
-                IsDuplicate: true,
-                PersistenceSucceeded: true,
-                _recentEvents.Count,
-                matchedRuleId,
-                confidenceBand);
+            return LifecycleResolutionResult.NotMatched(providerId, directive);
         }
 
-        var accepted = candidate with { Sequence = checked(++_sequence) };
-        AddRecentEventLocked(accepted);
-        var persistenceSucceeded = await PersistAndPublishLockedAsync(
-            accepted,
-            cancellationToken).ConfigureAwait(false);
-        return new EventAcceptanceResult(
-            accepted,
-            IsDuplicate: false,
-            persistenceSucceeded,
-            _recentEvents.Count,
-            matchedRuleId,
-            confidenceBand);
-    }
-
-    private async Task<PermissionResolutionResult> ResolveMatchingPermissionsLockedAsync(
-        string? sessionIdHash,
-        string? turnIdHash,
-        string? toolUseIdHash,
-        string? toolCategory,
-        bool resolveAllInTurn,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(turnIdHash))
+        var matches = _lifecycle.Resolve(providerId, directive);
+        if (matches.Count == 0)
         {
-            return PermissionResolutionResult.NotMatched(
-                sessionIdHash,
-                turnIdHash,
-                toolUseIdHash,
-                toolCategory);
+            return LifecycleResolutionResult.NotMatched(providerId, directive);
         }
 
-        var candidates = _permissions.Values
-            .Where(item => item.Snapshot.State is
-                PermissionLifecycleState.Observed or PermissionLifecycleState.Published)
-            .Where(item => item.Snapshot.TurnIdHash == turnIdHash)
-            .Where(item => sessionIdHash is null || item.Snapshot.SessionIdHash == sessionIdHash)
-            .OrderBy(item => item.Snapshot.ReceivedAt)
-            .ToArray();
-
-        PermissionEntry[] matches;
-        if (resolveAllInTurn)
-        {
-            matches = candidates;
-        }
-        else
-        {
-            var exact = string.IsNullOrWhiteSpace(toolUseIdHash)
-                ? null
-                : candidates.FirstOrDefault(item => item.Snapshot.ToolUseIdHash == toolUseIdHash);
-            var fallback = exact is null
-                ? candidates.FirstOrDefault(item =>
-                    item.Snapshot.ToolUseIdHash is null
-                    && item.Snapshot.ToolCategory == toolCategory)
-                : null;
-            matches = exact is not null ? [exact] : fallback is not null ? [fallback] : [];
-        }
-
-        if (matches.Length == 0)
-        {
-            return PermissionResolutionResult.NotMatched(
-                sessionIdHash,
-                turnIdHash,
-                toolUseIdHash,
-                toolCategory);
-        }
-
-        var observedCount = 0;
-        var publishedCount = 0;
+        var trackedCount = 0;
+        var deliveredCount = 0;
         var resolvedUpdates = new List<AgentEvent>();
-        foreach (var entry in matches)
+        foreach (var match in matches)
         {
-            var previousState = entry.Snapshot.State;
-            entry.Snapshot = entry.Snapshot with { State = PermissionLifecycleState.Resolved };
-            if (previousState == PermissionLifecycleState.Observed)
+            if (match.PreviousState == EventLifecycleState.Tracked)
             {
-                observedCount++;
+                trackedCount++;
                 continue;
             }
 
-            publishedCount++;
-            var index = _recentEvents.FindIndex(item => item.EventId == entry.Event.EventId);
+            deliveredCount++;
+            if (match.DeliverableEvent is null)
+            {
+                continue;
+            }
+
+            var index = _recentEvents.FindIndex(item => item.EventId == match.DeliverableEvent.EventId);
             if (index < 0)
             {
                 continue;
@@ -408,7 +262,7 @@ public sealed class EventPipeline : IAsyncDisposable
             };
             _recentEvents.RemoveAt(index);
             _recentEvents.Add(resolved);
-            entry.Event = resolved;
+            _lifecycle.UpdateDeliverable(providerId, resolved.EventId, resolved);
             resolvedUpdates.Add(resolved);
         }
 
@@ -424,56 +278,16 @@ public sealed class EventPipeline : IAsyncDisposable
             }
         }
 
-        return new PermissionResolutionResult(
+        return new LifecycleResolutionResult(
             Matched: true,
-            ObservedResolved: observedCount,
-            PublishedResolved: publishedCount,
+            TrackedResolved: trackedCount,
+            DeliveredResolved: deliveredCount,
             persistenceSucceeded,
-            sessionIdHash,
-            turnIdHash,
-            toolUseIdHash,
-            toolCategory);
-    }
-
-    private void AddRestoredPermission(AgentEvent item)
-    {
-        EnsurePermissionCapacityLocked();
-        var snapshot = new PermissionLifecycle
-        {
-            EventId = item.EventId,
-            SessionIdHash = item.ThreadIdHash,
-            TurnIdHash = item.TurnIdHash,
-            ToolUseIdHash = item.ToolUseIdHash,
-            ToolCategory = item.ToolCategory,
-            Project = item.Project,
-            ReceivedAt = item.OccurredAt,
-            State = item.ResolvedAt is null
-                ? PermissionLifecycleState.Published
-                : PermissionLifecycleState.Resolved,
-        };
-        var node = _permissionOrder.AddLast(item.EventId);
-        _permissions[item.EventId] = new PermissionEntry(snapshot, item, node);
-    }
-
-    private void EnsurePermissionCapacityLocked()
-    {
-        while (_permissions.Count >= DeduplicationCapacity)
-        {
-            var oldest = _permissionOrder.First;
-            if (oldest is null)
-            {
-                return;
-            }
-
-            _permissionOrder.RemoveFirst();
-            if (_permissions.Remove(oldest.Value, out var evicted))
-            {
-                evicted.Snapshot = evicted.Snapshot with
-                {
-                    State = PermissionLifecycleState.Expired,
-                };
-            }
-        }
+            providerId,
+            directive.SessionIdHash,
+            directive.TurnIdHash,
+            directive.ToolUseIdHash,
+            directive.ToolCategory);
     }
 
     private void AddRecentEventLocked(AgentEvent accepted)
@@ -496,9 +310,7 @@ public sealed class EventPipeline : IAsyncDisposable
         return persisted;
     }
 
-    private async Task TryPublishAsync(
-        AgentEvent agentEvent,
-        CancellationToken cancellationToken)
+    private async Task TryPublishAsync(AgentEvent agentEvent, CancellationToken cancellationToken)
     {
         try
         {
@@ -506,7 +318,7 @@ public sealed class EventPipeline : IAsyncDisposable
         }
         catch
         {
-            // LAN delivery is best-effort and cannot change the loopback HTTP contract.
+            // Delivery is best-effort and cannot change the loopback acceptance contract.
         }
     }
 
@@ -520,46 +332,40 @@ public sealed class EventPipeline : IAsyncDisposable
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
-
-    private sealed class PermissionEntry(
-        PermissionLifecycle snapshot,
-        AgentEvent agentEvent,
-        LinkedListNode<string> orderNode)
-    {
-        public PermissionLifecycle Snapshot { get; set; } = snapshot;
-
-        public AgentEvent Event { get; set; } = agentEvent;
-
-        public LinkedListNode<string> OrderNode { get; } = orderNode;
-    }
 }
 
-/// <summary>Contains only sanitized event-acceptance metadata.</summary>
-public sealed record EventAcceptanceResult(
-    AgentEvent Event,
+/// <summary>Contains only sanitized event-pipeline result metadata.</summary>
+public sealed record EventPipelineResult(
+    AgentEvent? Event,
+    NormalizedAgentEvent? NormalizedEvent,
     bool IsDuplicate,
     bool PersistenceSucceeded,
     int EventCount,
-    string? MatchedRuleId = null,
-    string? ConfidenceBand = null,
-    PermissionLifecycleState? PermissionState = null);
+    EventLifecycleState? LifecycleState,
+    LifecycleResolutionResult LifecycleResolution);
 
-/// <summary>Contains content-free PostToolUse/Stop resolution metadata.</summary>
-public sealed record PermissionResolutionResult(
+/// <summary>Contains content-free provider-scoped lifecycle resolution metadata.</summary>
+public sealed record LifecycleResolutionResult(
     bool Matched,
-    int ObservedResolved,
-    int PublishedResolved,
+    int TrackedResolved,
+    int DeliveredResolved,
     bool PersistenceSucceeded,
+    ProviderId ProviderId,
     string? SessionIdHash,
     string? TurnIdHash,
     string? ToolUseIdHash,
     string? ToolCategory)
 {
-    /// <summary>Creates a safe result when no permission could be correlated.</summary>
-    public static PermissionResolutionResult NotMatched(
-        string? sessionIdHash,
-        string? turnIdHash,
-        string? toolUseIdHash,
-        string? toolCategory) =>
-        new(false, 0, 0, true, sessionIdHash, turnIdHash, toolUseIdHash, toolCategory);
+    internal static LifecycleResolutionResult NotMatched(
+        ProviderId providerId,
+        LifecycleDirective directive) => new(
+            false,
+            0,
+            0,
+            true,
+            providerId,
+            directive.SessionIdHash,
+            directive.TurnIdHash,
+            directive.ToolUseIdHash,
+            directive.ToolCategory);
 }

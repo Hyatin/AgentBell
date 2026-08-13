@@ -138,7 +138,7 @@ public sealed class CodexEventTransformer
         return builder.ToString();
     }
 
-    private static string CreateEventId(
+    internal static string CreateEventId(
         string? threadIdHash,
         string? turnIdHash,
         string actionType)

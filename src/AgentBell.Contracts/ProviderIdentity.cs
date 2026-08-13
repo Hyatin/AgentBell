@@ -203,6 +203,45 @@ internal static class ContractValueValidation
         return ValidateOptionalStableKey(value, parameterName)!;
     }
 
+    public static string ValidateClassificationRuleId(string value, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameterName);
+        if (value.Length is 0 or > MaximumStableKeyLength || !IsLowerAsciiLetter(value[0]))
+        {
+            throw new ArgumentException("The value is not a classification rule identifier.", parameterName);
+        }
+
+        var previousWasSeparator = false;
+        for (var index = 1; index < value.Length; index++)
+        {
+            var character = value[index];
+            var isSeparator = character is '.' or '-' or '_';
+            if (isSeparator)
+            {
+                if (previousWasSeparator || index == value.Length - 1)
+                {
+                    throw new ArgumentException(
+                        "The value is not a classification rule identifier.",
+                        parameterName);
+                }
+
+                previousWasSeparator = true;
+                continue;
+            }
+
+            if (!IsLowerAsciiLetter(character) && !char.IsAsciiDigit(character))
+            {
+                throw new ArgumentException(
+                    "The value is not a classification rule identifier.",
+                    parameterName);
+            }
+
+            previousWasSeparator = false;
+        }
+
+        return value;
+    }
+
     public static string ValidateEventId(string value, string parameterName)
     {
         ArgumentNullException.ThrowIfNull(value, parameterName);

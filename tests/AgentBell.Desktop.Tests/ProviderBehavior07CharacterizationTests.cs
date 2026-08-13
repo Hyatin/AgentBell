@@ -83,10 +83,8 @@ public sealed class ProviderBehavior07CharacterizationTests
         var publisher = new CollectingEventPublisher();
         await using var pipeline = new EventPipeline(
             store,
-            CreateTransformer(),
-            publisher,
-            new ManualTimeProvider(FixedTime),
-            settings);
+            eventPublisher: publisher,
+            timeProvider: new ManualTimeProvider(FixedTime));
         await pipeline.InitializeAsync(CancellationToken.None);
         var sanitized = new PermissionRequestSanitizer().Sanitize(
             new CodexPermissionRequestPayload
@@ -102,17 +100,22 @@ public sealed class ProviderBehavior07CharacterizationTests
             OccurredAt = FixedTime,
         };
 
-        var accepted = await pipeline.AcceptAsync(sanitized, CancellationToken.None);
+        var accepted = await pipeline.AcceptAsync(
+            new CodexPipelineSubmissionFactory(
+                new ManualTimeProvider(FixedTime),
+                settings: settings).Create(sanitized),
+            CancellationToken.None);
+        var acceptedEvent = Assert.IsType<AgentEvent>(accepted.Event);
 
         Assert.False(accepted.IsDuplicate);
-        Assert.Equal(PermissionLifecycleState.Published, accepted.PermissionState);
-        Assert.Equal("codex-action:fa4afc83bf185000bb870ddb", accepted.Event.EventId);
-        Assert.Equal("permission_required", accepted.Event.ActionType);
-        Assert.Equal("command", accepted.Event.ToolCategory);
-        Assert.Equal(1, accepted.Event.Sequence);
+        Assert.Equal(EventLifecycleState.Delivered, accepted.LifecycleState);
+        Assert.Equal("codex-action:fa4afc83bf185000bb870ddb", acceptedEvent.EventId);
+        Assert.Equal("permission_required", acceptedEvent.ActionType);
+        Assert.Equal("command", acceptedEvent.ToolCategory);
+        Assert.Equal(1, acceptedEvent.Sequence);
         Assert.Single(store.Snapshot);
         Assert.Single(publisher.Events);
-        Assert07WireShape(accepted.Event);
+        Assert07WireShape(acceptedEvent);
     }
 
     [Fact]
@@ -126,8 +129,7 @@ public sealed class ProviderBehavior07CharacterizationTests
         var store = new InMemoryEventStore();
         await using var pipeline = new EventPipeline(
             store,
-            CreateTransformer(),
-            notificationSettings: settings);
+            timeProvider: new ManualTimeProvider(FixedTime));
         await pipeline.InitializeAsync(CancellationToken.None);
         var permission = new PermissionRequestSanitizer().Sanitize(
             new CodexPermissionRequestPayload
@@ -151,12 +153,17 @@ public sealed class ProviderBehavior07CharacterizationTests
                 ToolName = "Bash",
             });
 
-        await pipeline.AcceptAsync(permission, CancellationToken.None);
-        var resolution = await pipeline.ResolveAsync(postResult.Event, CancellationToken.None);
+        var submissionFactory = new CodexPipelineSubmissionFactory(
+            new ManualTimeProvider(FixedTime),
+            settings: settings);
+        await pipeline.AcceptAsync(submissionFactory.Create(permission), CancellationToken.None);
+        var resolution = await pipeline.AcceptAsync(
+            submissionFactory.Create(postResult.Event),
+            CancellationToken.None);
 
-        Assert.True(resolution.Matched);
-        Assert.Equal(0, resolution.ObservedResolved);
-        Assert.Equal(1, resolution.PublishedResolved);
+        Assert.True(resolution.LifecycleResolution.Matched);
+        Assert.Equal(0, resolution.LifecycleResolution.TrackedResolved);
+        Assert.Equal(1, resolution.LifecycleResolution.DeliveredResolved);
         Assert.False(JsonDocument.Parse(postResult.Json).RootElement.TryGetProperty("eventId", out _));
         var resolvedHistory = await pipeline.GetHistoryAsync(0, CancellationToken.None);
         var resolvedEvent = Assert.Single(resolvedHistory.Events);
@@ -164,13 +171,13 @@ public sealed class ProviderBehavior07CharacterizationTests
         Assert.NotNull(resolvedEvent.ResolvedAt);
 
         await pipeline.AcceptAsync(
-            new CodexStopHookPayload
+            submissionFactory.Create(new CodexStopHookPayload
             {
                 HookEventName = "Stop",
                 SessionId = "stable-session",
                 TurnId = "stable-turn",
                 LastAssistantMessage = "Synthetic work completed.",
-            },
+            }),
             CancellationToken.None);
 
         var history = await pipeline.GetHistoryAsync(0, CancellationToken.None);
@@ -200,14 +207,18 @@ public sealed class ProviderBehavior07CharacterizationTests
         var store = new InMemoryEventStore();
         await using var pipeline = new EventPipeline(
             store,
-            CreateTransformer(),
-            notificationSettings: settings);
+            timeProvider: new ManualTimeProvider(FixedTime));
         await pipeline.InitializeAsync(CancellationToken.None);
-        var accepted = await pipeline.AcceptAsync(sanitized.Event, CancellationToken.None);
-        var desktopJson = JsonSerializer.Serialize(accepted.Event, WireOptions);
+        var accepted = await pipeline.AcceptAsync(
+            new CodexPipelineSubmissionFactory(
+                new ManualTimeProvider(FixedTime),
+                settings: settings).Create(sanitized.Event),
+            CancellationToken.None);
+        var acceptedEvent = Assert.IsType<AgentEvent>(accepted.Event);
+        var desktopJson = JsonSerializer.Serialize(acceptedEvent, WireOptions);
         var historyJson = JsonSerializer.Serialize(store.Snapshot, WireOptions);
         var webSocketJson = JsonSerializer.Serialize(
-            new EventMessage { Payload = accepted.Event },
+            new EventMessage { Payload = acceptedEvent },
             WireOptions);
 
         Assert.DoesNotContain(Sentinel, sanitized.Json, StringComparison.Ordinal);

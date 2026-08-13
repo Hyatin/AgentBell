@@ -27,8 +27,7 @@ public sealed class WebSocketConnectionManagerTests
                     InitialResumeGracePeriod = TimeSpan.FromMilliseconds(1),
                 });
             var pipeline = new EventPipeline(
-                new InMemoryEventStore(),
-                new CodexEventTransformer());
+                new InMemoryEventStore());
             await pipeline.InitializeAsync(CancellationToken.None);
             using var slowSocket = new TestWebSocket(blockSends: true);
             using var healthySocket = new TestWebSocket(blockSends: false);

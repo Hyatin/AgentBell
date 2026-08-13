@@ -71,7 +71,7 @@ public sealed record EventClassification
     [JsonConstructor]
     public EventClassification(string ruleId, ClassificationConfidence confidence)
     {
-        RuleId = ContractValueValidation.ValidateStableKey(ruleId, nameof(ruleId));
+        RuleId = ContractValueValidation.ValidateClassificationRuleId(ruleId, nameof(ruleId));
         Confidence = ContractValueValidation.ValidateEnum(confidence, nameof(confidence));
     }
 

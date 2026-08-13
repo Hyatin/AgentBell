@@ -29,10 +29,11 @@ public sealed class CodexEventIngestionTests
         Assert.Equal(StatusCodes.Status202Accepted, result.StatusCode);
         Assert.Empty(result.Store.Snapshot);
         Assert.Equal(0, result.Store.SaveCount);
-        var observed = await pipeline.GetPermissionAsync(
+        var observed = await pipeline.GetLifecycleAsync(
+            AgentBell.Contracts.ProviderIds.Codex,
             sanitized.Event.EventId,
             CancellationToken.None);
-        Assert.Equal(PermissionLifecycleState.Observed, observed?.State);
+        Assert.Equal(EventLifecycleState.Tracked, observed?.State);
         Assert.Equal("command", observed?.ToolCategory);
         Assert.Equal("AgentBell", observed?.Project);
         var diagnostic = Assert.Single(result.Logger.Events);
@@ -84,21 +85,25 @@ public sealed class CodexEventIngestionTests
             });
         var store = new InMemoryEventStore();
         await using var pipeline = await CreatePipelineAsync(store);
-        await pipeline.AcceptAsync(permission.Event, CancellationToken.None);
+        await pipeline.AcceptAsync(
+            CreateSubmissionFactory().Create(permission.Event),
+            CancellationToken.None);
         var logger = new CollectingDesktopDiagnosticLogger();
 
         var result = await SendAsync(postToolUse.Json, pipeline, store, logger);
 
         Assert.Equal(StatusCodes.Status202Accepted, result.StatusCode);
         Assert.Equal(
-            PermissionLifecycleState.Resolved,
-            (await pipeline.GetPermissionAsync(
+            EventLifecycleState.Resolved,
+            (await pipeline.GetLifecycleAsync(
+                AgentBell.Contracts.ProviderIds.Codex,
                 permission.Event.EventId,
                 CancellationToken.None))?.State);
         Assert.Empty(store.Snapshot);
         var diagnostic = Assert.Single(logger.Events);
         Assert.Equal("codex-post-tool-use", diagnostic.EventType);
         Assert.Equal("resolved_observed", diagnostic.Result);
+        Assert.Equal(0, diagnostic.EventCount);
         var diagnosticJson = JsonSerializer.Serialize(diagnostic);
         Assert.DoesNotContain("private-session", diagnosticJson, StringComparison.Ordinal);
         Assert.DoesNotContain("private-turn", diagnosticJson, StringComparison.Ordinal);
@@ -118,13 +123,13 @@ public sealed class CodexEventIngestionTests
                 ToolName = "Bash",
             });
         var store = new InMemoryEventStore();
-        await using var pipeline = await CreatePipelineAsync(
-            store,
-            PermissionNotificationPolicy.AlwaysNotify);
+        await using var pipeline = await CreatePipelineAsync(store);
         var logger = new CollectingDesktopDiagnosticLogger();
 
-        var first = await SendAsync(sanitized.Json, pipeline, store, logger);
-        var duplicate = await SendAsync(sanitized.Json, pipeline, store, logger);
+        var submissionFactory = CreateSubmissionFactory(
+            PermissionNotificationPolicy.AlwaysNotify);
+        var first = await SendAsync(sanitized.Json, pipeline, store, logger, submissionFactory);
+        var duplicate = await SendAsync(sanitized.Json, pipeline, store, logger, submissionFactory);
 
         Assert.Equal(202, first.StatusCode);
         Assert.Equal(202, duplicate.StatusCode);
@@ -166,6 +171,8 @@ public sealed class CodexEventIngestionTests
         var diagnosticJson = JsonSerializer.Serialize(diagnostic);
         Assert.Equal("codex-stop", diagnostic.EventType);
         Assert.Equal(202, diagnostic.HttpStatusCode);
+        Assert.Null(diagnostic.SessionIdHash);
+        Assert.Equal("none", diagnostic.ConfidenceBand);
         Assert.DoesNotContain(Json, diagnosticJson, StringComparison.Ordinal);
         Assert.DoesNotContain("private-session", diagnosticJson, StringComparison.Ordinal);
         Assert.DoesNotContain("private-turn", diagnosticJson, StringComparison.Ordinal);
@@ -327,15 +334,23 @@ public sealed class CodexEventIngestionTests
         string json,
         EventPipeline pipeline,
         InMemoryEventStore store,
-        CollectingDesktopDiagnosticLogger logger) =>
-        SendAsync(Encoding.UTF8.GetBytes(json), "application/json", pipeline, store, logger);
+        CollectingDesktopDiagnosticLogger logger,
+        CodexPipelineSubmissionFactory? submissionFactory = null) =>
+        SendAsync(
+            Encoding.UTF8.GetBytes(json),
+            "application/json",
+            pipeline,
+            store,
+            logger,
+            submissionFactory);
 
     private static async Task<IngestionRun> SendAsync(
         byte[] body,
         string? contentType,
         EventPipeline pipeline,
         InMemoryEventStore store,
-        CollectingDesktopDiagnosticLogger logger)
+        CollectingDesktopDiagnosticLogger logger,
+        CodexPipelineSubmissionFactory? submissionFactory = null)
     {
         var context = new DefaultHttpContext();
         context.Request.Method = HttpMethods.Post;
@@ -344,13 +359,23 @@ public sealed class CodexEventIngestionTests
         context.Request.Body = new MemoryStream(body, writable: false);
         context.Response.Body = new MemoryStream();
 
-        await CodexEventIngestion.HandleAsync(context, pipeline, logger);
+        await CodexEventIngestion.HandleAsync(
+            context,
+            pipeline,
+            submissionFactory ?? CreateSubmissionFactory(),
+            logger);
 
         return new IngestionRun(context.Response.StatusCode, store, logger);
     }
 
-    private static async Task<EventPipeline> CreatePipelineAsync(
-        InMemoryEventStore store,
+    private static async Task<EventPipeline> CreatePipelineAsync(InMemoryEventStore store)
+    {
+        var pipeline = new EventPipeline(store);
+        await pipeline.InitializeAsync(CancellationToken.None);
+        return pipeline;
+    }
+
+    private static CodexPipelineSubmissionFactory CreateSubmissionFactory(
         PermissionNotificationPolicy permissionPolicy = PermissionNotificationPolicy.Off)
     {
         var settings = new DesktopNotificationSettingsState();
@@ -358,12 +383,7 @@ public sealed class CodexEventIngestionTests
         {
             PermissionNotificationPolicy = permissionPolicy,
         });
-        var pipeline = new EventPipeline(
-            store,
-            new CodexEventTransformer(),
-            notificationSettings: settings);
-        await pipeline.InitializeAsync(CancellationToken.None);
-        return pipeline;
+        return new CodexPipelineSubmissionFactory(settings: settings);
     }
 
     private sealed record IngestionRun(
